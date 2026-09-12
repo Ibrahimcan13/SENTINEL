@@ -1,0 +1,24 @@
+
+data:
+  default_ticker: "RACE"
+
+analysis:
+  window_size: 20
+  rsi_window: 14
+  atr_window: 14
+  bollinger_std: 2.0
+  use_kalman: true
+
+machine_learning:
+  train_window: 200
+  forecast_days: 5
+  retrain_step: 20
+
+backtest:
+  initial_capital: 1000.0
+  risk_per_trade: 0.02
+  commission_rate: 0.001
+  slippage_rate: 0.0005
+  use_atr_stop: true
+  atr_multiplier: 2.0
+  ai_exit_threshold: 0.50
