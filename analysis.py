@@ -1,10 +1,11 @@
 import numpy as np
 import pandas as pd
+from numba import njit
 
-
+@njit(fastmath=True)
 def _kalman_loop(prices: np.ndarray, r_variances: np.ndarray, q_variances: np.ndarray) -> np.ndarray:
     n = len(prices)
-    kalman_estimates = np.zeros(n, dtype=np.float32)
+    kalman_estimates = np.zeros(n, dtype=np.float64)
     if n == 0:
         return kalman_estimates
 
