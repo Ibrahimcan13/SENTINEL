@@ -3,10 +3,9 @@ import os
 os.environ["SKLEARN_ASSUME_FINITE"] = "true"
 os.environ["PYTHONWARNINGS"] = "ignore"
 
-
+from datetime import datetime, timedelta
 import logging
 import traceback
-from datetime import datetime
 import pandas as pd
 import yaml
 
@@ -39,18 +38,20 @@ def load_config(config_path: str = "config.yaml") -> dict:
         raise e
 
 
-def get_valid_date(prompt: str) -> datetime:
+def get_optional_date(prompt: str, default_dt: datetime) -> datetime:
+    default_str = default_dt.strftime("%Y-%m-%d")
     while True:
-        date_str = input(prompt).strip()
+        user_input = input(f"{prompt} [Default: {default_str}]: ").strip()
+        if not user_input:
+            return default_dt
         try:
-            dt = datetime.strptime(date_str, "%Y-%m-%d")
-            return dt
+            return datetime.strptime(user_input, "%Y-%m-%d")
         except ValueError:
             logging.error("Invalid format! Please use YYYY-MM-DD (e.g., 2026-01-01).")
 
 
 def run_sentinel():
-    print("           PROJECT SENTINEL             ")
+    print("             PROJECT SENTINEL             ")
 
     cfg = load_config("config.yaml")
 
@@ -60,7 +61,6 @@ def run_sentinel():
     bt_cfg = cfg.get("backtest", {})
 
     try:
-        # Ticker Selection
         default_ticker = data_cfg.get("default_ticker", "RACE")
         user_ticker = input(f"Enter asset ticker [Default: {default_ticker}]: ").strip().upper()
         if not user_ticker:
@@ -77,12 +77,13 @@ def run_sentinel():
         forecast_days = ml_cfg.get("forecast_days", 5)
         retrain_step = ml_cfg.get("retrain_step", 20)
 
-        print("\n[Date Configuration]")
+        print("\n[Date Configuration] (Press Enter to use automatic 1-year window)")
         today = datetime.now()
+        default_start = today - timedelta(days=365)
 
         while True:
-            start_dt = get_valid_date("Enter Start Date (YYYY-MM-DD): ")
-            end_dt = get_valid_date("Enter End Date (YYYY-MM-DD): ")
+            start_dt = get_optional_date("Enter Start Date (YYYY-MM-DD)", default_start)
+            end_dt = get_optional_date("Enter End Date (YYYY-MM-DD)", today)
 
             if start_dt > today or end_dt > today:
                 logging.warning(f"Dates cannot be in the future! Current System Date: {today.strftime('%Y-%m-%d')}\n")
@@ -105,7 +106,7 @@ def run_sentinel():
         end_date = end_dt.strftime("%Y-%m-%d")
 
         logging.info(f"Fetching {user_ticker} data from {start_date} to {end_date}...")
-        df = fetch_market_data(user_ticker, start_date, end_date)
+        df = fetch_market_data(user_ticker, start_date=start_date, end_date=end_date)
         if df.empty:
             logging.error("Failed to fetch market data. Terminating.")
             return

@@ -32,7 +32,7 @@ def _normalize_yfinance_columns(df: pd.DataFrame, ticker: str = "") -> pd.DataFr
     return df
 
 
-def clean_market_data(df: pd.DataFrame) -> pd.DataFrame:
+def clean_market_data(df: pd.DataFrame, keep_weekends: bool = False) -> pd.DataFrame:
     if df.empty:
         return df
 
@@ -42,11 +42,17 @@ def clean_market_data(df: pd.DataFrame) -> pd.DataFrame:
         df.index = df.index.tz_localize(None)
 
     df = df.sort_index()
-    df = df[df.index.dayofweek < 5]
+
+    if not keep_weekends:
+        df = df[df.index.dayofweek < 5]
+
     df = df.dropna(how="all")
 
     float_cols = df.select_dtypes(include=['float64']).columns
     df[float_cols] = df[float_cols].astype('float32')
+
+    if 'Volume' in df.columns:
+        df['Volume'] = df['Volume'].fillna(0).astype('int64').astype('float32')
 
     return df
 
@@ -146,13 +152,18 @@ def fetch_market_data(
         tickers: str | list[str],
         start_date: str = None,
         end_date: str = None,
+        days_back: int = 365,
         folder: str = "data",
         combine_into_single_df: bool = False
 ) -> pd.DataFrame | dict[str, pd.DataFrame]:
     if end_date is None:
-        end_date = datetime.now().strftime("%Y-%m-%d")
+        end_dt = datetime.now()
+        end_date = end_dt.strftime("%Y-%m-%d")
+    else:
+        end_dt = datetime.strptime(end_date, "%Y-%m-%d")
+
     if start_date is None:
-        start_date = (datetime.now() - timedelta(days=365 * 5)).strftime("%Y-%m-%d")
+        start_date = (end_dt - timedelta(days=days_back)).strftime("%Y-%m-%d")
 
     if isinstance(tickers, str):
         ticker_list = [t.strip().upper() for t in tickers.replace(",", " ").split() if t.strip()]

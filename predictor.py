@@ -5,10 +5,10 @@ from sklearn.preprocessing import RobustScaler
 
 
 def apply_triple_barrier_labels(
-        df: pd.DataFrame,
-        pt_multiplier: float = 2.0,
-        sl_multiplier: float = 1.0,
-        max_holding_days: int = 5
+    df: pd.DataFrame,
+    pt_multiplier: float = 2.0,
+    sl_multiplier: float = 1.0,
+    max_holding_days: int = 5
 ) -> pd.Series:
 
     if "ATR" not in df.columns or df.empty:
@@ -50,49 +50,26 @@ def apply_triple_barrier_labels(
     return pd.Series(labels, index=df.index)
 
 
-def create_features_and_targets(df: pd.DataFrame, forecast_days: int = 5, z_window: int = 20) -> pd.DataFrame:
+def create_features_and_targets(df: pd.DataFrame, forecast_days: int = 5) -> pd.DataFrame:
     if df.empty:
         return df
 
     data = df.copy()
 
     data["Feat_Return"] = data["Close"].pct_change().fillna(0.0)
-
-    if "RSI" in data.columns:
-        data["Feat_RSI_Norm"] = ((data["RSI"] - 50.0) / 50.0).fillna(0.0)
-    else:
-        data["Feat_RSI_Norm"] = 0.0
-
-    if "ATR" in data.columns:
-        atr_ratio = data["ATR"] / (data["Close"] + 1e-9)
-        median_atr = atr_ratio.rolling(z_window).median()
-        iqr_atr = (atr_ratio.rolling(z_window).quantile(0.75) - atr_ratio.rolling(z_window).quantile(0.25)) / 1.349
-        data["Feat_ATR_ZScore"] = ((atr_ratio - median_atr) / (iqr_atr + 1e-9)).fillna(0.0)
-    else:
-        data["Feat_ATR_ZScore"] = 0.0
-
+    data["Feat_RSI_Norm"] = ((data["RSI"] - 50.0) / 50.0).fillna(0.0) if "RSI" in data.columns else 0.0
+    data["Feat_ATR_Ratio"] = (data["ATR"] / (data["Close"] + 1e-9)).fillna(0.0) if "ATR" in data.columns else 0.0
+    
     if "Kalman" in data.columns:
-        kalman_dev = (data["Close"] - data["Kalman"]) / (data["Kalman"] + 1e-9)
-        median_kdev = kalman_dev.rolling(z_window).median()
-        iqr_kdev = (kalman_dev.rolling(z_window).quantile(0.75) - kalman_dev.rolling(z_window).quantile(0.25)) / 1.349
-        data["Feat_Kalman_ZScore"] = ((kalman_dev - median_kdev) / (iqr_kdev + 1e-9)).fillna(0.0)
+        data["Feat_Kalman_Dev"] = ((data["Close"] - data["Kalman"]) / (data["Kalman"] + 1e-9)).fillna(0.0)
     else:
-        data["Feat_Kalman_ZScore"] = 0.0
+        data["Feat_Kalman_Dev"] = 0.0
 
     sma_cols = [col for col in data.columns if col.startswith("SMA_")]
     primary_sma = data[sma_cols[0]] if sma_cols else data["Close"].rolling(20).mean()
-    sma_dev = (data["Close"] - primary_sma) / (primary_sma + 1e-9)
-    median_sdev = sma_dev.rolling(z_window).median()
-    iqr_sdev = (sma_dev.rolling(z_window).quantile(0.75) - sma_dev.rolling(z_window).quantile(0.25)) / 1.349
-    data["Feat_SMA_Dev_ZScore"] = ((sma_dev - median_sdev) / (iqr_sdev + 1e-9)).fillna(0.0)
+    data["Feat_SMA_Dev"] = ((data["Close"] - primary_sma) / (primary_sma + 1e-9)).fillna(0.0)
 
-    if "Volume" in data.columns:
-        median_vol = data["Volume"].rolling(z_window).median()
-        iqr_vol = (data["Volume"].rolling(z_window).quantile(0.75) - data["Volume"].rolling(z_window).quantile(
-            0.25)) / 1.349
-        data["Feat_Volume_ZScore"] = ((data["Volume"] - median_vol) / (iqr_vol + 1e-9)).fillna(0.0)
-    else:
-        data["Feat_Volume_ZScore"] = 0.0
+    data["Feat_Volume"] = data["Volume"].fillna(0.0) if "Volume" in data.columns else 0.0
 
     data["Target_Direction"] = apply_triple_barrier_labels(
         data, pt_multiplier=2.0, sl_multiplier=1.0, max_holding_days=forecast_days
@@ -102,11 +79,10 @@ def create_features_and_targets(df: pd.DataFrame, forecast_days: int = 5, z_wind
 
 
 def train_and_predict(
-        df: pd.DataFrame,
-        forecast_days: int = 5,
-        train_window: int = 200,
-        retrain_step: int = 20,
-        use_warm_start: bool = True
+    df: pd.DataFrame,
+    forecast_days: int = 5,
+    train_window: int = 200,
+    retrain_step: int = 20
 ) -> pd.DataFrame:
     processed_df = create_features_and_targets(df, forecast_days=forecast_days)
 
@@ -117,17 +93,12 @@ def train_and_predict(
     feature_cols = [col for col in processed_df.columns if col.startswith("Feat_")]
 
     if len(processed_df) < train_window + forecast_days + 10:
-        print(
-            f"[Sentinel] Predictor warning: Too few rows ({len(processed_df)}) for rolling window size ({train_window}).")
+        print(f"[Sentinel] Predictor warning: Too few rows ({len(processed_df)}) for rolling window.")
         return df
 
     probabilities = [0.50] * len(processed_df)
     current_model = None
     scaler = None
-
-    initial_trees = 30
-    inc_trees = 5
-    max_trees = 100
 
     for i in range(train_window + forecast_days, len(processed_df)):
         if (i - (train_window + forecast_days)) % retrain_step == 0 or current_model is None:
@@ -146,21 +117,15 @@ def train_and_predict(
             scaler = RobustScaler()
             X_train_scaled = scaler.fit_transform(X_train)
 
-            if use_warm_start and current_model is not None:
-                if current_model.n_estimators < max_trees:
-                    current_model.n_estimators += inc_trees
-                current_model.fit(X_train_scaled, y_train)
-            else:
-                current_model = RandomForestClassifier(
-                    n_estimators=initial_trees if use_warm_start else 50,
-                    max_depth=5,
-                    min_samples_leaf=5,
-                    class_weight="balanced",
-                    warm_start=use_warm_start,
-                    n_jobs=-1,
-                    random_state=42
-                )
-                current_model.fit(X_train_scaled, y_train)
+            current_model = RandomForestClassifier(
+                n_estimators=50,
+                max_depth=5,
+                min_samples_leaf=5,
+                class_weight="balanced",
+                n_jobs=-1,
+                random_state=42
+            )
+            current_model.fit(X_train_scaled, y_train)
 
         X_test = processed_df.iloc[[i]][feature_cols]
         X_test_scaled = scaler.transform(X_test)
@@ -169,8 +134,5 @@ def train_and_predict(
     processed_df["AI_Probability"] = probabilities
     processed_df["AI_Signal"] = (processed_df["AI_Probability"] > 0.55).astype(np.int8)
 
-    print(
-        f"[Sentinel] Purged Walk-Forward with Triple Barrier Labels & Robust Scaling "
-        f"(Warm Start: {use_warm_start}, Gap: {forecast_days}d, Window: {train_window}d, Retrain Step: {retrain_step}d)."
-    )
+    print(f"[Sentinel] Purged Walk-Forward completed. (Gap: {forecast_days}d, Window: {train_window}d).")
     return processed_df

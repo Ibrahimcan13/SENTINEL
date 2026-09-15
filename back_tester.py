@@ -3,10 +3,10 @@ import pandas as pd
 
 
 def calculate_backtest_metrics(
-        df: pd.DataFrame,
-        trade_log: list[dict],
-        initial_capital: float,
-        equity_series: pd.Series,
+    df: pd.DataFrame,
+    trade_log: list[dict],
+    initial_capital: float,
+    equity_series: pd.Series,
 ) -> dict:
     total_trades = len(trade_log)
     winning_trades = sum(1 for t in trade_log if t["PnL"] > 0)
@@ -72,14 +72,14 @@ def calculate_backtest_metrics(
 
 
 def run_backtest(
-        df: pd.DataFrame,
-        initial_capital: float = 1000.0,
-        risk_per_trade: float = 0.02,
-        commission_rate: float = 0.001,
-        slippage_rate: float = 0.0005,
-        use_atr_stop: bool = True,
-        atr_multiplier: float = 2.0,
-        ai_exit_threshold: float = 0.50,
+    df: pd.DataFrame,
+    initial_capital: float = 1000.0,
+    risk_per_trade: float = 0.02,
+    commission_rate: float = 0.001,
+    slippage_rate: float = 0.0005,
+    use_atr_stop: bool = True,
+    atr_multiplier: float = 2.0,
+    ai_exit_threshold: float = 0.50,
 ) -> tuple[pd.DataFrame, list[dict], dict]:
     if df.empty or "Signal" not in df.columns:
         print("[Warning] DataFrame is empty or missing 'Signal' column.")
@@ -100,6 +100,7 @@ def run_backtest(
 
     dates = df.index.to_numpy()
     close_arr = df["Close"].to_numpy(dtype=np.float64)
+    open_arr = df["Open"].to_numpy(dtype=np.float64) if "Open" in df.columns else close_arr
     high_arr = df["High"].to_numpy(dtype=np.float64)
     low_arr = df["Low"].to_numpy(dtype=np.float64)
     signal_arr = df["Signal"].to_numpy(dtype=np.int8)
@@ -124,17 +125,62 @@ def run_backtest(
     peak_price_since_entry = 0.0
     trough_price_since_entry = 0.0
 
+    pending_action = 0  
+    pending_reason = ""
+
     trade_log = []
     equity_list = np.zeros(len(df), dtype=np.float64)
 
     for i in range(len(df)):
         current_date = dates[i]
+        current_open = open_arr[i]
         current_close = close_arr[i]
         current_high = high_arr[i]
         current_low = low_arr[i]
-        signal = signal_arr[i]
-        ai_prob = ai_prob_arr[i]
         atr_val = atr_arr[i]
+
+        if pending_action != 0 and position == 0.0:
+            if pending_action == 1:  # Long Giriş
+                buy_price = current_open * (1.0 + slippage_rate)
+                if atr_val > 0.0 and use_atr_stop:
+                    risk_amount = cash * risk_per_trade
+                    stop_distance = atr_val * atr_multiplier
+                    raw_shares = risk_amount / (stop_distance + 1e-9)
+                    allocated_cash = min(cash * 0.95, raw_shares * buy_price)
+                else:
+                    allocated_cash = cash * 0.10
+
+                commission = allocated_cash * commission_rate
+                investable_cash = allocated_cash - commission
+
+                position = investable_cash / buy_price
+                entry_price = buy_price
+                entry_cost = allocated_cash
+                entry_date = current_date
+                peak_price_since_entry = current_high
+                cash -= allocated_cash
+
+            elif pending_action == -1: 
+                short_price = current_open * (1.0 - slippage_rate)
+                if atr_val > 0.0 and use_atr_stop:
+                    risk_amount = cash * risk_per_trade
+                    stop_distance = atr_val * atr_multiplier
+                    raw_shares = risk_amount / (stop_distance + 1e-9)
+                    allocated_cash = min(cash * 0.95, raw_shares * short_price)
+                else:
+                    allocated_cash = cash * 0.10
+
+                commission = allocated_cash * commission_rate
+                investable_cash = allocated_cash - commission
+
+                position = -(investable_cash / short_price)
+                entry_price = short_price
+                entry_cost = allocated_cash
+                entry_date = current_date
+                trough_price_since_entry = current_low
+                cash -= allocated_cash
+
+            pending_action = 0  
 
         if position > 0.0:
             peak_price_since_entry = max(peak_price_since_entry, current_high)
@@ -144,12 +190,13 @@ def run_backtest(
                 else 0.0
             )
 
-            hit_stop_loss = use_atr_stop and (current_close <= stop_loss_price)
-            ai_bearish_exit = not np.isnan(ai_prob) and (ai_prob < ai_exit_threshold)
-            sell_signal = (signal == -1)
+            hit_stop_loss = use_atr_stop and (current_low <= stop_loss_price)
+            ai_bearish_exit = not np.isnan(ai_prob_arr[i]) and (ai_prob_arr[i] < ai_exit_threshold)
+            sell_signal = (signal_arr[i] == -1)
 
             if hit_stop_loss or ai_bearish_exit or sell_signal:
-                sell_price = current_close * (1.0 - slippage_rate)
+                exit_base_price = stop_loss_price if hit_stop_loss else current_close
+                sell_price = exit_base_price * (1.0 - slippage_rate)
                 gross_cash = position * sell_price
                 commission = gross_cash * commission_rate
                 net_returned_cash = gross_cash - commission
@@ -194,12 +241,13 @@ def run_backtest(
                 else float("inf")
             )
 
-            hit_stop_loss = use_atr_stop and (current_close >= stop_loss_price)
-            ai_bullish_exit = not np.isnan(ai_prob) and (ai_prob > (1.0 - ai_exit_threshold))
-            buy_signal = (signal == 1)
+            hit_stop_loss = use_atr_stop and (current_high >= stop_loss_price)
+            ai_bullish_exit = not np.isnan(ai_prob_arr[i]) and (ai_prob_arr[i] > (1.0 - ai_exit_threshold))
+            buy_signal = (signal_arr[i] == 1)
 
             if hit_stop_loss or ai_bullish_exit or buy_signal:
-                cover_price = current_close * (1.0 + slippage_rate)
+                exit_base_price = stop_loss_price if hit_stop_loss else current_close
+                cover_price = exit_base_price * (1.0 + slippage_rate)
                 buyback_cost = abs(position) * cover_price
                 commission = buyback_cost * commission_rate
                 total_exit_cost = buyback_cost + commission
@@ -236,46 +284,11 @@ def run_backtest(
                 entry_cost = 0.0
                 entry_date = None
 
-        if position == 0.0:
-            if signal == 1:
-                buy_price = current_close * (1.0 + slippage_rate)
-                if atr_val > 0.0 and use_atr_stop:
-                    risk_amount = cash * risk_per_trade
-                    stop_distance = atr_val * atr_multiplier
-                    raw_shares = risk_amount / (stop_distance + 1e-9)
-                    allocated_cash = min(cash * 0.95, raw_shares * buy_price)
-                else:
-                    allocated_cash = cash * 0.10
-
-                commission = allocated_cash * commission_rate
-                investable_cash = allocated_cash - commission
-
-                position = investable_cash / buy_price
-                entry_price = buy_price
-                entry_cost = allocated_cash
-                entry_date = current_date
-                peak_price_since_entry = current_close
-                cash -= allocated_cash
-
-            elif signal == -1:
-                short_price = current_close * (1.0 - slippage_rate)
-                if atr_val > 0.0 and use_atr_stop:
-                    risk_amount = cash * risk_per_trade
-                    stop_distance = atr_val * atr_multiplier
-                    raw_shares = risk_amount / (stop_distance + 1e-9)
-                    allocated_cash = min(cash * 0.95, raw_shares * short_price)
-                else:
-                    allocated_cash = cash * 0.10
-
-                commission = allocated_cash * commission_rate
-                investable_cash = allocated_cash - commission
-
-                position = -(investable_cash / short_price)
-                entry_price = short_price
-                entry_cost = allocated_cash
-                entry_date = current_date
-                trough_price_since_entry = current_close
-                cash -= allocated_cash
+        if position == 0.0 and pending_action == 0:
+            if signal_arr[i] == 1:
+                pending_action = 1
+            elif signal_arr[i] == -1:
+                pending_action = -1
 
         if position > 0.0:
             current_equity = cash + (position * current_close)
@@ -317,7 +330,6 @@ def run_backtest(
             "Duration_Days": (pd.Timestamp(dates[-1]) - pd.Timestamp(entry_date)).days if entry_date is not None else 0,
             "Reason": "End of Data (Auto Close)",
         })
-        position = 0.0
         equity_list[-1] = cash
 
     equity_series = pd.Series(equity_list, index=df.index)
