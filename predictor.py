@@ -56,20 +56,13 @@ def create_features_and_targets(df: pd.DataFrame, forecast_days: int = 5) -> pd.
 
     data = df.copy()
 
-    data["Feat_Return"] = data["Close"].pct_change().fillna(0.0)
-    data["Feat_RSI_Norm"] = ((data["RSI"] - 50.0) / 50.0).fillna(0.0) if "RSI" in data.columns else 0.0
-    data["Feat_ATR_Ratio"] = (data["ATR"] / (data["Close"] + 1e-9)).fillna(0.0) if "ATR" in data.columns else 0.0
+    data["feat_return"] = data["Close"].pct_change().fillna(0.0)
+
+    if "feat_rsi_scaled" not in data.columns:
+        data["feat_rsi_scaled"] = ((data["RSI"] - 50.0) / 50.0).fillna(0.0) if "RSI" in data.columns else 0.0
     
-    if "Kalman" in data.columns:
-        data["Feat_Kalman_Dev"] = ((data["Close"] - data["Kalman"]) / (data["Kalman"] + 1e-9)).fillna(0.0)
-    else:
-        data["Feat_Kalman_Dev"] = 0.0
-
-    sma_cols = [col for col in data.columns if col.startswith("SMA_")]
-    primary_sma = data[sma_cols[0]] if sma_cols else data["Close"].rolling(20).mean()
-    data["Feat_SMA_Dev"] = ((data["Close"] - primary_sma) / (primary_sma + 1e-9)).fillna(0.0)
-
-    data["Feat_Volume"] = data["Volume"].fillna(0.0) if "Volume" in data.columns else 0.0
+    if "feat_kalman_dev" not in data.columns and "Kalman" in data.columns:
+        data["feat_kalman_dev"] = ((data["Close"] - data["Kalman"]) / (data["Kalman"] + 1e-9)).fillna(0.0)
 
     data["Target_Direction"] = apply_triple_barrier_labels(
         data, pt_multiplier=2.0, sl_multiplier=1.0, max_holding_days=forecast_days
@@ -90,7 +83,7 @@ def train_and_predict(
         print("[Sentinel] Predictor error: Insufficient data to train the model.")
         return df
 
-    feature_cols = [col for col in processed_df.columns if col.startswith("Feat_")]
+    feature_cols = [col for col in processed_df.columns if col.startswith("feat_")]
 
     if len(processed_df) < train_window + forecast_days + 10:
         print(f"[Sentinel] Predictor warning: Too few rows ({len(processed_df)}) for rolling window.")
@@ -134,5 +127,5 @@ def train_and_predict(
     processed_df["AI_Probability"] = probabilities
     processed_df["AI_Signal"] = (processed_df["AI_Probability"] > 0.55).astype(np.int8)
 
-    print(f"[Sentinel] Purged Walk-Forward completed. (Gap: {forecast_days}d, Window: {train_window}d).")
+    print(f"[Sentinel] Purged Walk-Forward completed with {len(feature_cols)} features ({', '.join(feature_cols)}).")
     return processed_df

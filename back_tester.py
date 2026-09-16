@@ -96,6 +96,10 @@ def run_backtest(
         }
         return df, [], empty_metrics
 
+    if "Open" not in df.columns or df["Open"].isnull().all():
+        print("[Warning] 'Open' column missing/NaN. Deriving from previous Close.")
+        df["Open"] = df["Close"].shift(1).fillna(df["Close"])
+
     df = df.copy()
 
     dates = df.index.to_numpy()

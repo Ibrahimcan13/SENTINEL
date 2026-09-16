@@ -1,6 +1,7 @@
 from collections import OrderedDict
 from datetime import datetime, timedelta
 import os
+import numpy as np
 import pandas as pd
 import yfinance as yf
 
@@ -47,6 +48,25 @@ def clean_market_data(df: pd.DataFrame, keep_weekends: bool = False) -> pd.DataF
         df = df[df.index.dayofweek < 5]
 
     df = df.dropna(how="all")
+
+    required_cols = ["Open", "High", "Low", "Close"]
+    
+    if "Open" not in df.columns and "Close" in df.columns:
+        print("[Sentinel Warning] 'Open' kolonu eksik! 'Close.shift(1)' ile türetiliyor.")
+        df["Open"] = df["Close"].shift(1).fillna(df["Close"])
+
+    if "High" not in df.columns and "Close" in df.columns:
+        df["High"] = df[["Open", "Close"]].max(axis=1) if "Open" in df.columns else df["Close"]
+    if "Low" not in df.columns and "Close" in df.columns:
+        df["Low"] = df[["Open", "Close"]].min(axis=1) if "Open" in df.columns else df["Close"]
+
+    present_ohlc = [c for c in required_cols if c in df.columns]
+    if present_ohlc:
+        df[present_ohlc] = df[present_ohlc].ffill().bfill()
+
+        if "Open" in df.columns and "High" in df.columns and "Low" in df.columns:
+            df["High"] = df[["High", "Open", "Close"]].max(axis=1)
+            df["Low"] = df[["Low", "Open", "Close"]].min(axis=1)
 
     float_cols = df.select_dtypes(include=['float64']).columns
     df[float_cols] = df[float_cols].astype('float32')

@@ -9,14 +9,7 @@ import traceback
 import pandas as pd
 import yaml
 
-from analysis import (
-    add_bollinger_bands,
-    add_kalman_filter,
-    add_rsi,
-    calculate_average_true_range,
-    calculate_moving_average,
-    generate_signals,
-)
+from analysis import extract_features
 from back_tester import run_backtest
 from data_loader import fetch_market_data, save_data_to_parquet
 from predictor import train_and_predict
@@ -69,9 +62,6 @@ def run_sentinel():
         initial_capital = bt_cfg.get("initial_capital", 1000.0)
         window_size = analysis_cfg.get("window_size", 20)
         rsi_window = analysis_cfg.get("rsi_window", 14)
-        atr_window = analysis_cfg.get("atr_window", 14)
-        bollinger_std = analysis_cfg.get("bollinger_std", 2.0)
-        use_kalman = analysis_cfg.get("use_kalman", True)
 
         train_window = ml_cfg.get("train_window", 200)
         forecast_days = ml_cfg.get("forecast_days", 5)
@@ -111,20 +101,8 @@ def run_sentinel():
             logging.error("Failed to fetch market data. Terminating.")
             return
 
-        logging.info("Calculating technical indicators & Kalman Filter...")
-        if use_kalman:
-            df = add_kalman_filter(df)
-
-        df = calculate_moving_average(df, window=window_size)
-        df = add_rsi(df, window=rsi_window)
-        df = calculate_average_true_range(df, window=atr_window)
-        df = add_bollinger_bands(df, window=window_size, num_std=bollinger_std)
-
-        logging.info("Generating Baseline Trading Signals...")
-        try:
-            df = generate_signals(df, window=window_size, use_kalman=use_kalman)
-        except TypeError:
-            df = generate_signals(df, window=window_size)
+        logging.info("Extracting ML Features & Technical Indicators (Kalman, RSI, ATR)...")
+        df = extract_features(df, window=window_size)
 
         logging.info("Executing Walk-Forward AI Training & Inference Pipeline...")
         df = train_and_predict(
@@ -155,12 +133,11 @@ def run_sentinel():
         )
         latest_price = df["Close"].iloc[-1]
 
-        print("\n          SENTINEL STATUS REPORT                  ")
+        print("\n           SENTINEL STATUS REPORT                  ")
         print(f"Target Asset       : {user_ticker}")
         print(f"Starting Capital   : ${initial_capital:.2f}")
         print(f"Latest Close Price : ${latest_price:.2f}")
-        print(
-            f"Analysis Pipeline  : Kalman ({use_kalman}) | SMA {window_size}d | RSI {rsi_window}d | ATR {atr_window}d")
+        print(f"Analysis Pipeline  : Kalman Filter | SMA {window_size}d | Robust Features")
         print(f"Total Trades       : {metrics.get('total_trades', 0)}")
         print(f"Winning Trades     : {metrics.get('winning_trades', 0)}")
         print(f"Win Rate           : %{metrics.get('win_rate', 0.0):.1f}")
