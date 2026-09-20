@@ -55,12 +55,13 @@ def add_kalman_filter(
     if "ATR" not in df.columns:
         df = calculate_average_true_range(df)
 
-    prices = df["Close"].to_numpy(dtype=np.float64)
-    atr_values = df["ATR"].fillna(df["Close"] * 0.02).to_numpy(dtype=np.float64)
+    prices = np.ascontiguousarray(df["Close"].to_numpy(dtype=np.float64))
+    atr_values = np.ascontiguousarray(df["ATR"].fillna(df["Close"] * 0.02).to_numpy(dtype=np.float64))
+    
     atr_norm = atr_values / (prices + 1e-9)
 
-    r_variances = base_measurement_variance / (1.0 + (atr_norm * 100.0))
-    q_variances = base_process_variance * (1.0 + (atr_norm * 50.0))
+    r_variances = np.ascontiguousarray(base_measurement_variance / (1.0 + (atr_norm * 100.0)))
+    q_variances = np.ascontiguousarray(base_process_variance * (1.0 + (atr_norm * 50.0)))
 
     df["Kalman"] = _kalman_loop(prices, r_variances, q_variances)
     df["feat_kalman_dev"] = (df["Kalman"] - df["Close"]) / (df["Close"] + 1e-9)
@@ -81,22 +82,33 @@ def add_rsi(df: pd.DataFrame, window: int = 14) -> pd.DataFrame:
 
     rs = avg_gain / (avg_loss + 1e-9)
     df["RSI"] = 100 - (100 / (1 + rs))
-    df["feat_rsi_scaled"] = (df["RSI"] - 50.0) / 50.0  # Normalized between -1 and 1
+    df["feat_rsi_scaled"] = (df["RSI"] - 50.0) / 50.0  
     return df
 
 
-def get_robust_zscore(series: pd.Series, window: int = 20) -> pd.Series:
-    rolling_median = series.rolling(window=window).median()
-    q75 = series.rolling(window=window).quantile(0.75)
-    q25 = series.rolling(window=window).quantile(0.25)
-    iqr = q75 - q25
+def get_rolling_mad(series: pd.Series, window: int = 20) -> pd.Series:
+    """
+    EKLENDİ: Mean Absolute Deviation (MAD) hesaplaması.
+    Outlier (aşırı gürültü) etkilerini engellemek için rolling ortalamadan mutlak sapmaların ortalamasını alır.
+    """
+    rolling_mean = series.rolling(window=window).mean()
+    mad = (series - rolling_mean).abs().rolling(window=window).mean()
+    return mad
 
-    robust_zscore = (series - rolling_median) / (iqr / 1.349 + 1e-9)
+
+def get_robust_zscore(series: pd.Series, window: int = 20) -> pd.Series:
+    """
+    EKLENDİ: Standart sapma yerine MAD tabanlı Z-Score (Daha stabil ve gürültüsüz).
+    Normal dağılımda MAD * 1.2533 yaklaşık olarak standart sapmaya eşittir.
+    """
+    rolling_mean = series.rolling(window=window).mean()
+    mad = get_rolling_mad(series, window=window)
+
+    robust_zscore = (series - rolling_mean) / (mad * 1.2533 + 1e-9)
     return robust_zscore.fillna(0.0)
 
 
 def extract_features(df: pd.DataFrame, window: int = 20) -> pd.DataFrame:
-
     if df.empty:
         return df
 
@@ -109,13 +121,10 @@ def extract_features(df: pd.DataFrame, window: int = 20) -> pd.DataFrame:
     sma_col = f"SMA_{window}"
     df[sma_col] = df["Close"].rolling(window=window).mean()
 
-    q75 = df["Close"].rolling(window=window).quantile(0.75)
-    q25 = df["Close"].rolling(window=window).quantile(0.25)
-    robust_std = (q75 - q25) / 1.349
-    df["feat_volatility"] = robust_std / (df[sma_col] + 1e-9)
+    mad_volatility = get_rolling_mad(df["Close"], window=window) * 1.2533
+    df["feat_volatility"] = mad_volatility / (df[sma_col] + 1e-9)
 
     df["feat_price_dev"] = (df["Close"] - df[sma_col]) / (df[sma_col] * df["feat_volatility"] + 1e-9)
     df["feat_vol_zscore"] = get_robust_zscore(df["Volume"], window=window) if "Volume" in df.columns else 0.0
 
-    print(f"[Sentinel] Successfully generated ML features for dataset ({len(df)} rows).")
     return df

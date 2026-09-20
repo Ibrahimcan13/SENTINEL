@@ -47,32 +47,36 @@ def clean_market_data(df: pd.DataFrame, keep_weekends: bool = False) -> pd.DataF
     if not keep_weekends:
         df = df[df.index.dayofweek < 5]
 
-    df = df.dropna(how="all")
-
     required_cols = ["Open", "High", "Low", "Close"]
-    
-    if "Open" not in df.columns and "Close" in df.columns:
-        print("[Sentinel Warning] 'Open' kolonu eksik! 'Close.shift(1)' ile türetiliyor.")
-        df["Open"] = df["Close"].shift(1).fillna(df["Close"])
+    missing_cols = [col for col in required_cols if col not in df.columns]
 
-    if "High" not in df.columns and "Close" in df.columns:
-        df["High"] = df[["Open", "Close"]].max(axis=1) if "Open" in df.columns else df["Close"]
-    if "Low" not in df.columns and "Close" in df.columns:
-        df["Low"] = df[["Open", "Close"]].min(axis=1) if "Open" in df.columns else df["Close"]
+    if missing_cols:
+        print(f"[Sentinel Warning] Eksik OHLC sütunları: {missing_cols}. Veri seti geçersiz kabul edildi.")
+        return pd.DataFrame()
 
-    present_ohlc = [c for c in required_cols if c in df.columns]
-    if present_ohlc:
-        df[present_ohlc] = df[present_ohlc].ffill().bfill()
+    df = df.dropna(subset=required_cols)
 
-        if "Open" in df.columns and "High" in df.columns and "Low" in df.columns:
-            df["High"] = df[["High", "Open", "Close"]].max(axis=1)
-            df["Low"] = df[["Low", "Open", "Close"]].min(axis=1)
+    valid_bars = (
+        (df["High"] >= df["Low"]) & 
+        (df["High"] >= df["Open"]) & 
+        (df["High"] >= df["Close"]) & 
+        (df["Low"] <= df["Open"]) & 
+        (df["Low"] <= df["Close"])
+    )
+
+    invalid_count = (~valid_bars).sum()
+    if invalid_count > 0:
+        print(f"[Sentinel Warning] Mantıksız OHLC ilişkisine sahip {invalid_count} bar ayıklandı.")
+        df = df[valid_bars]
+
+    if df.empty:
+        return df
 
     float_cols = df.select_dtypes(include=['float64']).columns
     df[float_cols] = df[float_cols].astype('float32')
 
     if 'Volume' in df.columns:
-        df['Volume'] = df['Volume'].fillna(0).astype('int64').astype('float32')
+        df['Volume'] = df['Volume'].fillna(0).astype('float32')
 
     return df
 
@@ -155,6 +159,10 @@ def _fetch_single_ticker(ticker: str, start_date: str, end_date: str, folder: st
 
         df = _normalize_yfinance_columns(df, ticker=ticker)
         df = clean_market_data(df)
+
+        if df.empty:
+            print(f"[Error] Data for '{ticker}' failed quality checks and was dropped.")
+            return pd.DataFrame()
 
         print(f"[Sentinel] Successfully downloaded {len(df)} rows for {ticker} (UTC Normalized).")
 

@@ -60,7 +60,7 @@ def create_features_and_targets(df: pd.DataFrame, forecast_days: int = 5) -> pd.
 
     if "feat_rsi_scaled" not in data.columns:
         data["feat_rsi_scaled"] = ((data["RSI"] - 50.0) / 50.0).fillna(0.0) if "RSI" in data.columns else 0.0
-    
+        
     if "feat_kalman_dev" not in data.columns and "Kalman" in data.columns:
         data["feat_kalman_dev"] = ((data["Close"] - data["Kalman"]) / (data["Kalman"] + 1e-9)).fillna(0.0)
 
@@ -125,7 +125,4 @@ def train_and_predict(
         probabilities[i] = current_model.predict_proba(X_test_scaled)[0, 1]
 
     processed_df["AI_Probability"] = probabilities
-    processed_df["AI_Signal"] = (processed_df["AI_Probability"] > 0.55).astype(np.int8)
-
-    print(f"[Sentinel] Purged Walk-Forward completed with {len(feature_cols)} features ({', '.join(feature_cols)}).")
     return processed_df

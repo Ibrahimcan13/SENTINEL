@@ -9,6 +9,7 @@ analysis:
   use_kalman: true
 
 machine_learning:
+  model_type: "random_forest"  
   train_window: 200
   forecast_days: 5
   retrain_step: 20

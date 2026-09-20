@@ -13,6 +13,7 @@ from analysis import extract_features
 from back_tester import run_backtest
 from data_loader import fetch_market_data, save_data_to_parquet
 from predictor import train_and_predict
+from strategy import generate_hybrid_signals  # <-- EKLENDİ
 from visualizer import plot_signals
 
 logging.basicConfig(
@@ -52,6 +53,7 @@ def run_sentinel():
     analysis_cfg = cfg.get("analysis", {})
     ml_cfg = cfg.get("machine_learning", {})
     bt_cfg = cfg.get("backtest", {})
+    strategy_cfg = cfg.get("strategy", {})  # <-- EKLENDİ
 
     try:
         default_ticker = data_cfg.get("default_ticker", "RACE")
@@ -110,6 +112,13 @@ def run_sentinel():
             forecast_days=forecast_days,
             train_window=train_window,
             retrain_step=retrain_step
+        )
+
+        logging.info("Generating Hybrid Trading Signals (AI Probability + Trend Filter)...")
+        df = generate_hybrid_signals(
+            df,
+            ai_upper_threshold=strategy_cfg.get("ai_upper_threshold", 0.55),
+            ai_lower_threshold=strategy_cfg.get("ai_lower_threshold", 0.45)
         )
 
         logging.info("Executing Backtest Engine with AI Probability Filtering...")
