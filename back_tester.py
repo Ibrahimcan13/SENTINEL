@@ -144,7 +144,7 @@ def run_backtest(
         atr_val = atr_arr[i]
 
         if pending_action != 0 and position == 0.0:
-            if pending_action == 1:  # Long Giriş
+            if pending_action == 1:  
                 buy_price = current_open * (1.0 + slippage_rate)
                 if atr_val > 0.0 and use_atr_stop:
                     risk_amount = cash * risk_per_trade
@@ -164,7 +164,7 @@ def run_backtest(
                 peak_price_since_entry = current_high
                 cash -= allocated_cash
 
-            elif pending_action == -1: 
+            elif pending_action == -1:  
                 short_price = current_open * (1.0 - slippage_rate)
                 if atr_val > 0.0 and use_atr_stop:
                     risk_amount = cash * risk_per_trade
@@ -186,7 +186,7 @@ def run_backtest(
 
             pending_action = 0  
 
-        if position > 0.0:
+        if position > 0.0:  
             peak_price_since_entry = max(peak_price_since_entry, current_high)
             stop_loss_price = (
                 peak_price_since_entry - (atr_val * atr_multiplier)
@@ -237,7 +237,7 @@ def run_backtest(
                 entry_cost = 0.0
                 entry_date = None
 
-        elif position < 0.0:
+        elif position < 0.0: 
             trough_price_since_entry = min(trough_price_since_entry, current_low)
             stop_loss_price = (
                 trough_price_since_entry + (atr_val * atr_multiplier)
@@ -252,13 +252,16 @@ def run_backtest(
             if hit_stop_loss or ai_bullish_exit or buy_signal:
                 exit_base_price = stop_loss_price if hit_stop_loss else current_close
                 cover_price = exit_base_price * (1.0 + slippage_rate)
-                buyback_cost = abs(position) * cover_price
-                commission = buyback_cost * commission_rate
-                total_exit_cost = buyback_cost + commission
-
-                pnl = entry_cost - total_exit_cost
-                pnl_pct = (pnl / (entry_cost + 1e-9)) * 100.0
-                cash += (entry_cost + pnl)
+                
+                num_shares = abs(position)
+                gross_pnl = (entry_price - cover_price) * num_shares
+                
+                buyback_value = num_shares * cover_price
+                commission = buyback_value * commission_rate
+                net_pnl = gross_pnl - commission
+                
+                pnl_pct = (net_pnl / (entry_cost + 1e-9)) * 100.0
+                cash += (entry_cost + net_pnl)
 
                 duration_days = (
                     (pd.Timestamp(current_date) - pd.Timestamp(entry_date)).days
@@ -277,7 +280,7 @@ def run_backtest(
                     "Exit_Date": current_date,
                     "Entry_Price": entry_price,
                     "Exit_Price": cover_price,
-                    "PnL": pnl,
+                    "PnL": net_pnl,
                     "PnL_Pct": pnl_pct,
                     "Duration_Days": duration_days,
                     "Reason": reason,
@@ -314,21 +317,24 @@ def run_backtest(
             pnl_pct = (pnl / (entry_cost + 1e-9)) * 100.0
             cash += (gross_cash - commission)
             p_type = "LONG"
+            exit_p = sell_price
         else:
             cover_price = last_close * (1.0 + slippage_rate)
-            buyback_cost = abs(position) * cover_price
-            commission = buyback_cost * commission_rate
-            pnl = entry_cost - (buyback_cost + commission)
+            num_shares = abs(position)
+            gross_pnl = (entry_price - cover_price) * num_shares
+            commission = (num_shares * cover_price) * commission_rate
+            pnl = gross_pnl - commission
             pnl_pct = (pnl / (entry_cost + 1e-9)) * 100.0
             cash += (entry_cost + pnl)
             p_type = "SHORT"
+            exit_p = cover_price
 
         trade_log.append({
             "Type": p_type,
             "Entry_Date": entry_date,
             "Exit_Date": dates[-1],
             "Entry_Price": entry_price,
-            "Exit_Price": last_close,
+            "Exit_Price": exit_p,
             "PnL": pnl,
             "PnL_Pct": pnl_pct,
             "Duration_Days": (pd.Timestamp(dates[-1]) - pd.Timestamp(entry_date)).days if entry_date is not None else 0,

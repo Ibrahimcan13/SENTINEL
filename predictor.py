@@ -111,13 +111,15 @@ def train_and_predict(
             X_train_scaled = scaler.fit_transform(X_train)
 
             current_model = RandomForestClassifier(
-                n_estimators=50,
-                max_depth=5,
-                min_samples_leaf=5,
+                n_estimators=100,      
+                max_depth=4,          
+                min_samples_leaf=10, 
+                max_features="sqrt",   
                 class_weight="balanced",
                 n_jobs=-1,
                 random_state=42
             )
+            
             current_model.fit(X_train_scaled, y_train)
 
         X_test = processed_df.iloc[[i]][feature_cols]

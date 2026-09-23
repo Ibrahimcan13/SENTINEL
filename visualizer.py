@@ -110,18 +110,28 @@ def plot_signals(
             )
 
     if trade_log:
-        stop_dates, stop_prices = [], []
+        stop_events = []
         for trade in trade_log:
             exit_reason = str(trade.get("Reason", trade.get("exit_reason", ""))).upper()
             if "STOP" in exit_reason:
-                stop_dates.append(trade.get("Exit_Date", trade.get("exit_date")))
-                stop_prices.append(trade.get("Exit_Price", trade.get("exit_price")))
+                date = trade.get("Exit_Date", trade.get("exit_date"))
+                price = trade.get("Exit_Price", trade.get("exit_price"))
+                if date is not None and price is not None:
+                    stop_events.append((date, price))
 
-        if stop_dates:
+        if stop_events:
+            stop_dates, stop_prices = zip(*stop_events)
+            hover_stops = [f"Stop-Loss Hit<br>Price: ${p:.2f}" for p in stop_prices]
+
             fig.add_trace(
                 go.Scatter(
-                    x=stop_dates, y=stop_prices, mode="markers", name="Stop-Loss Hit",
-                    marker=dict(symbol="x", size=12, color="#ff9800", line=dict(width=2))
+                    x=list(stop_dates),
+                    y=list(stop_prices),
+                    mode="markers",
+                    name="Stop-Loss Hit",
+                    marker=dict(symbol="x", size=12, color="#ff9800", line=dict(width=2)),
+                    hovertext=hover_stops,
+                    hoverinfo="text+x"
                 ),
                 row=1, col=1
             )
@@ -145,7 +155,7 @@ def plot_signals(
             row=3, col=1
         )
         fig.add_hline(y=70, line_dash="dash", line_color="#ff1744", row=3, col=1)
-        fig.add_hline(y=30, line_dash="dash", line_color="#00e676", row=3, col=1)
+        fig.add_hline(y=30, line_dash="dash", line_color="#00e645", row=3, col=1)
 
     if "Volume" in df.columns:
         fig.add_trace(

@@ -13,7 +13,7 @@ from analysis import extract_features
 from back_tester import run_backtest
 from data_loader import fetch_market_data, save_data_to_parquet
 from predictor import train_and_predict
-from strategy import generate_hybrid_signals  # <-- EKLENDİ
+from strategy import generate_hybrid_signals  
 from visualizer import plot_signals
 
 logging.basicConfig(
@@ -45,7 +45,7 @@ def get_optional_date(prompt: str, default_dt: datetime) -> datetime:
 
 
 def run_sentinel():
-    print("             PROJECT SENTINEL             ")
+    print("                PROJECT SENTINEL                  ")
 
     cfg = load_config("config.yaml")
 
@@ -53,7 +53,7 @@ def run_sentinel():
     analysis_cfg = cfg.get("analysis", {})
     ml_cfg = cfg.get("machine_learning", {})
     bt_cfg = cfg.get("backtest", {})
-    strategy_cfg = cfg.get("strategy", {})  # <-- EKLENDİ
+    strategy_cfg = cfg.get("strategy", {})
 
     try:
         default_ticker = data_cfg.get("default_ticker", "RACE")
@@ -89,7 +89,8 @@ def run_sentinel():
             min_required = train_window + max(window_size, rsi_window) + 14
             if days_difference < min_required:
                 logging.warning(
-                    f"Date range is too short ({days_difference} days). Requires AT LEAST {min_required} days!\n")
+                    f"Date range is too short ({days_difference} days). Requires AT LEAST {min_required} days!\n"
+                )
                 continue
 
             break
@@ -142,7 +143,7 @@ def run_sentinel():
         )
         latest_price = df["Close"].iloc[-1]
 
-        print("\n           SENTINEL STATUS REPORT                  ")
+        print("              SENTINEL STATUS REPORT              ")
         print(f"Target Asset       : {user_ticker}")
         print(f"Starting Capital   : ${initial_capital:.2f}")
         print(f"Latest Close Price : ${latest_price:.2f}")
@@ -165,6 +166,7 @@ def run_sentinel():
             print(f"Bearish Probability ({forecast_days}d ahead) : %{bearish_pct:.1f}")
         else:
             print("AI FORECAST            : Insufficient data for prediction window.")
+  
 
         logging.info("Rendering Plotly Interactive Dashboard...")
         save_filename = f"{user_ticker}_sentinel_report.html"
