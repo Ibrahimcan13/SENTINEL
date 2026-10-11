@@ -76,7 +76,7 @@ def clean_market_data(df: pd.DataFrame, keep_weekends: bool = False) -> pd.DataF
     df[float_cols] = df[float_cols].astype('float32')
 
     if 'Volume' in df.columns:
-        df['Volume'] = df['Volume'].fillna(0).astype('float32')
+        df['Volume'] = df['Volume'].fillna(0).astype('float32' , errors='ignore')
 
     return df
 

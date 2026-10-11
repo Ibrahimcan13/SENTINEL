@@ -95,7 +95,8 @@ def train_and_predict(
 
     for i in range(train_window + forecast_days, len(processed_df)):
         if (i - (train_window + forecast_days)) % retrain_step == 0 or current_model is None:
-            train_end_idx = i - forecast_days
+            z = 2
+            train_end_idx = i - int(forecast_days * z)
             train_start_idx = train_end_idx - train_window
 
             train_chunk = processed_df.iloc[train_start_idx:train_end_idx]

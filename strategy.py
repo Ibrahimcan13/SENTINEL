@@ -5,7 +5,8 @@ import numpy as np
 def generate_hybrid_signals(
     df: pd.DataFrame, 
     ai_upper_threshold: float = 0.55,
-    ai_lower_threshold: float = 0.45
+    ai_lower_threshold: float = 0.45,
+    allow_short: bool = True 
 ) -> pd.DataFrame:
     if df.empty or "AI_Probability" not in df.columns:
         print("[Sentinel Warning] 'AI_Probability' column is missing for Strategy Engine.")
@@ -24,8 +25,11 @@ def generate_hybrid_signals(
     ai_bullish = df["AI_Probability"] > ai_upper_threshold
     ai_bearish = df["AI_Probability"] < ai_lower_threshold
 
-    df.loc[ai_bullish & trend_bullish, "Signal"] = 1
+    long_condition = ai_bullish & trend_bullish
+    df.loc[long_condition, "Signal"] = 1
 
-    df.loc[ai_bearish | trend_bearish, "Signal"] = -1
-
+    if allow_short:
+        short_condition = ai_bearish & trend_bearish
+        df.loc[short_condition, "Signal"] = -1
+    
     return df

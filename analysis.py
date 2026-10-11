@@ -55,13 +55,15 @@ def add_kalman_filter(
     if "ATR" not in df.columns:
         df = calculate_average_true_range(df)
 
+    lagged_atr = df["ATR"].shift(1).fillna(df["Close"] * 0.02)
+
     prices = np.ascontiguousarray(df["Close"].to_numpy(dtype=np.float64))
-    atr_values = np.ascontiguousarray(df["ATR"].fillna(df["Close"] * 0.02).to_numpy(dtype=np.float64))
+    atr_values = np.ascontiguousarray(lagged_atr.to_numpy(dtype=np.float64))
     
     atr_norm = atr_values / (prices + 1e-9)
 
     r_variances = np.ascontiguousarray(base_measurement_variance / (1.0 + (atr_norm * 100.0)))
-    q_variances = np.ascontiguousarray(base_process_variance * (1.0 + (atr_norm * 50.0)))
+    q_variances = np.ascontiguousarray(base_process_variance / (1.0 + (atr_norm * 50.0)))
 
     df["Kalman"] = _kalman_loop(prices, r_variances, q_variances)
     df["feat_kalman_dev"] = (df["Kalman"] - df["Close"]) / (df["Close"] + 1e-9)
@@ -87,20 +89,14 @@ def add_rsi(df: pd.DataFrame, window: int = 14) -> pd.DataFrame:
 
 
 def get_rolling_mad(series: pd.Series, window: int = 20) -> pd.Series:
-    """
-    EKLENDİ: Mean Absolute Deviation (MAD) hesaplaması.
-    Outlier (aşırı gürültü) etkilerini engellemek için rolling ortalamadan mutlak sapmaların ortalamasını alır.
-    """
+  
     rolling_mean = series.rolling(window=window).mean()
     mad = (series - rolling_mean).abs().rolling(window=window).mean()
     return mad
 
 
 def get_robust_zscore(series: pd.Series, window: int = 20) -> pd.Series:
-    """
-    EKLENDİ: Standart sapma yerine MAD tabanlı Z-Score (Daha stabil ve gürültüsüz).
-    Normal dağılımda MAD * 1.2533 yaklaşık olarak standart sapmaya eşittir.
-    """
+    
     rolling_mean = series.rolling(window=window).mean()
     mad = get_rolling_mad(series, window=window)
 

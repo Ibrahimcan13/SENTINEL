@@ -4,6 +4,7 @@ os.environ["SKLEARN_ASSUME_FINITE"] = "true"
 os.environ["PYTHONWARNINGS"] = "ignore"
 
 from datetime import datetime, timedelta
+import pytz  
 import logging
 import traceback
 import pandas as pd
@@ -45,7 +46,7 @@ def get_optional_date(prompt: str, default_dt: datetime) -> datetime:
 
 
 def run_sentinel():
-    print("                PROJECT SENTINEL                  ")
+    print("                    PROJECT SENTINEL                    ")
 
     cfg = load_config("config.yaml")
 
@@ -69,16 +70,20 @@ def run_sentinel():
         forecast_days = ml_cfg.get("forecast_days", 5)
         retrain_step = ml_cfg.get("retrain_step", 20)
 
-        print("\n[Date Configuration] (Press Enter to use automatic 1-year window)")
-        today = datetime.now()
+        print("\n[Date Configuration] (Press Enter to use automatic UTC-safe window)")
+
+        ny_tz = pytz.timezone("America/New_York")
+        now_ny = datetime.now(ny_tz)
+
+        today = now_ny.date()
         default_start = today - timedelta(days=365)
 
         while True:
-            start_dt = get_optional_date("Enter Start Date (YYYY-MM-DD)", default_start)
-            end_dt = get_optional_date("Enter End Date (YYYY-MM-DD)", today)
+            start_dt = get_optional_date("Enter Start Date (YYYY-MM-DD)", datetime.combine(default_start, datetime.min.time()))
+            end_dt = get_optional_date("Enter End Date (YYYY-MM-DD)", datetime.combine(today, datetime.min.time()))
 
-            if start_dt > today or end_dt > today:
-                logging.warning(f"Dates cannot be in the future! Current System Date: {today.strftime('%Y-%m-%d')}\n")
+            if start_dt.date() > today or end_dt.date() > today:
+                logging.warning(f"Dates cannot be in the future! NY Market Date: {today}\n")
                 continue
 
             if start_dt >= end_dt:
@@ -143,7 +148,7 @@ def run_sentinel():
         )
         latest_price = df["Close"].iloc[-1]
 
-        print("              SENTINEL STATUS REPORT              ")
+        print("            SENTINEL STATUS REPORT             ")
         print(f"Target Asset       : {user_ticker}")
         print(f"Starting Capital   : ${initial_capital:.2f}")
         print(f"Latest Close Price : ${latest_price:.2f}")
@@ -166,7 +171,7 @@ def run_sentinel():
             print(f"Bearish Probability ({forecast_days}d ahead) : %{bearish_pct:.1f}")
         else:
             print("AI FORECAST            : Insufficient data for prediction window.")
-  
+ 
 
         logging.info("Rendering Plotly Interactive Dashboard...")
         save_filename = f"{user_ticker}_sentinel_report.html"

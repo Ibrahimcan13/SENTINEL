@@ -65,22 +65,6 @@ def plot_signals(
             row=1, col=1
         )
 
-    bb_upper_col = f"BB_Upper_{window}"
-    bb_lower_col = f"BB_Lower_{window}"
-    if bb_upper_col in df.columns and bb_lower_col in df.columns:
-        fig.add_trace(
-            go.Scatter(x=df.index, y=df[bb_upper_col], mode="lines", name="BB Upper", line=dict(color="#ab47bc", width=1, dash="dot")),
-            row=1, col=1
-        )
-        fig.add_trace(
-            go.Scatter(
-                x=df.index, y=df[bb_lower_col], mode="lines", name="BB Lower",
-                line=dict(color="#ab47bc", width=1, dash="dot"),
-                fill="tonexty", fillcolor="rgba(0, 229, 255, 0.03)"
-            ),
-            row=1, col=1
-        )
-
     if "Signal" in df.columns:
         buy_signals = df[df["Signal"] == 1]
         sell_signals = df[df["Signal"] == -1]

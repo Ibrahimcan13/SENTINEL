@@ -261,8 +261,9 @@ def run_backtest(
                 net_pnl = gross_pnl - commission
                 
                 pnl_pct = (net_pnl / (entry_cost + 1e-9)) * 100.0
-                cash += (entry_cost + net_pnl)
-
+                returned_cash = entry_cost + net_pnl
+                cash += returned_cash
+                
                 duration_days = (
                     (pd.Timestamp(current_date) - pd.Timestamp(entry_date)).days
                     if entry_date is not None else 0
