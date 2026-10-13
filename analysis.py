@@ -31,7 +31,6 @@ def calculate_average_true_range(df: pd.DataFrame, window: int = 14) -> pd.DataF
     if df.empty or not required_cols.issubset(df.columns):
         return df
 
-    df = df.copy()
     high_low = df["High"] - df["Low"]
     high_prev_close = (df["High"] - df["Close"].shift(1)).abs()
     low_prev_close = (df["Low"] - df["Close"].shift(1)).abs()
@@ -49,8 +48,6 @@ def add_kalman_filter(
 ) -> pd.DataFrame:
     if df.empty or "Close" not in df.columns:
         return df
-
-    df = df.copy()
 
     if "ATR" not in df.columns:
         df = calculate_average_true_range(df)
@@ -74,7 +71,6 @@ def add_rsi(df: pd.DataFrame, window: int = 14) -> pd.DataFrame:
     if df.empty or "Close" not in df.columns:
         return df
 
-    df = df.copy()
     delta = df["Close"].diff()
     gain = delta.clip(lower=0)
     loss = -delta.clip(upper=0)
@@ -89,16 +85,14 @@ def add_rsi(df: pd.DataFrame, window: int = 14) -> pd.DataFrame:
 
 
 def get_rolling_mad(series: pd.Series, window: int = 20) -> pd.Series:
-  
     rolling_mean = series.rolling(window=window).mean()
     mad = (series - rolling_mean).abs().rolling(window=window).mean()
     return mad
 
 
 def get_robust_zscore(series: pd.Series, window: int = 20) -> pd.Series:
-    
     rolling_mean = series.rolling(window=window).mean()
-    mad = get_rolling_mad(series, window=window)
+    mad = get_rolling_mad(series=series, window=window)
 
     robust_zscore = (series - rolling_mean) / (mad * 1.2533 + 1e-9)
     return robust_zscore.fillna(0.0)
@@ -107,8 +101,6 @@ def get_robust_zscore(series: pd.Series, window: int = 20) -> pd.Series:
 def extract_features(df: pd.DataFrame, window: int = 20) -> pd.DataFrame:
     if df.empty:
         return df
-
-    df = df.copy()
 
     df = calculate_average_true_range(df, window=14)
     df = add_rsi(df, window=14)

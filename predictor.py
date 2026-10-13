@@ -91,7 +91,7 @@ def train_and_predict(
 
     probabilities = [0.50] * len(processed_df)
     current_model = None
-    scaler = None
+    scaler = None  
 
     for i in range(train_window + forecast_days, len(processed_df)):
         if (i - (train_window + forecast_days)) % retrain_step == 0 or current_model is None:

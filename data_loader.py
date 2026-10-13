@@ -10,7 +10,7 @@ _DATA_CACHE: OrderedDict[str, pd.DataFrame] = OrderedDict()
 
 
 def _normalize_yfinance_columns(df: pd.DataFrame, ticker: str = "") -> pd.DataFrame:
-    if df.empty:
+    if df.empty or df.columns is None:
         return df
 
     if isinstance(df.columns, pd.MultiIndex):
