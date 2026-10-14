@@ -6,6 +6,7 @@ os.environ["PYTHONWARNINGS"] = "ignore"
 from datetime import datetime, timedelta
 import pytz  
 import logging
+import sys
 import traceback
 import pandas as pd
 import yaml
@@ -17,11 +18,28 @@ from predictor import train_and_predict
 from strategy import generate_hybrid_signals  
 from visualizer import plot_signals
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(message)s",
-    datefmt="%Y-%m-%d %H:%M:%S"
-)
+logger = logging.getLogger("Sentinel")
+logger.setLevel(logging.DEBUG)
+
+if not logger.handlers:
+    file_handler = logging.FileHandler("sentinel_system.log", encoding="utf-8")
+    file_handler.setLevel(logging.DEBUG)
+    file_formatter = logging.Formatter(
+        fmt="%(asctime)s [%(levelname)s] | %(filename)s:%(lineno)d | %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S"
+    )
+    file_handler.setFormatter(file_formatter)
+
+    console_handler = logging.StreamHandler(sys.stdout)
+    console_handler.setLevel(logging.INFO)
+    console_formatter = logging.Formatter(
+        fmt="%(asctime)s [%(levelname)s] %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S"
+    )
+    console_handler.setFormatter(console_formatter)
+
+    logger.addHandler(file_handler)
+    logger.addHandler(console_handler)
 
 
 def load_config(config_path: str = "config.yaml") -> dict:
@@ -29,7 +47,7 @@ def load_config(config_path: str = "config.yaml") -> dict:
         with open(config_path, "r", encoding="utf-8") as f:
             return yaml.safe_load(f)
     except Exception as e:
-        logging.error(f"Failed to load config file ({config_path}): {e}")
+        logger.critical(f"Failed to load config file ({config_path}). System cannot start.", exc_info=True)
         raise e
 
 
@@ -42,7 +60,7 @@ def get_optional_date(prompt: str, default_dt: datetime) -> datetime:
         try:
             return datetime.strptime(user_input, "%Y-%m-%d")
         except ValueError:
-            logging.error("Invalid format! Please use YYYY-MM-DD (e.g., 2026-01-01).")
+            logger.error("Invalid format! Please use YYYY-MM-DD (e.g., 2026-01-01).")
 
 
 def run_sentinel():
@@ -70,6 +88,8 @@ def run_sentinel():
         forecast_days = ml_cfg.get("forecast_days", 5)
         retrain_step = ml_cfg.get("retrain_step", 20)
 
+        ml_hyperparameters = ml_cfg.get("hyperparameters", {})
+
         print("\n[Date Configuration] (Press Enter to use automatic UTC-safe window)")
 
         ny_tz = pytz.timezone("America/New_York")
@@ -83,17 +103,17 @@ def run_sentinel():
             end_dt = get_optional_date("Enter End Date (YYYY-MM-DD)", datetime.combine(today, datetime.min.time()))
 
             if start_dt.date() > today or end_dt.date() > today:
-                logging.warning(f"Dates cannot be in the future! NY Market Date: {today}\n")
+                logger.warning(f"Dates cannot be in the future! NY Market Date: {today}\n")
                 continue
 
             if start_dt >= end_dt:
-                logging.warning("Start date must be BEFORE the end date!\n")
+                logger.warning("Start date must be BEFORE the end date!\n")
                 continue
 
             days_difference = (end_dt - start_dt).days
             min_required = train_window + max(window_size, rsi_window) + 14
             if days_difference < min_required:
-                logging.warning(
+                logger.warning(
                     f"Date range is too short ({days_difference} days). Requires AT LEAST {min_required} days!\n"
                 )
                 continue
@@ -103,31 +123,35 @@ def run_sentinel():
         start_date = start_dt.strftime("%Y-%m-%d")
         end_date = end_dt.strftime("%Y-%m-%d")
 
-        logging.info(f"Fetching {user_ticker} data from {start_date} to {end_date}...")
+        logger.info(f"Fetching {user_ticker} data from {start_date} to {end_date}...")
         df = fetch_market_data(user_ticker, start_date=start_date, end_date=end_date)
+        
         if df.empty:
-            logging.error("Failed to fetch market data. Terminating.")
+            logger.error(f"Failed to fetch market data for {user_ticker}. Terminating pipeline.")
             return
 
-        logging.info("Extracting ML Features & Technical Indicators (Kalman, RSI, ATR)...")
+        logger.info("Extracting ML Features & Technical Indicators (Kalman, RSI, ATR)...")
         df = extract_features(df, window=window_size)
 
-        logging.info("Executing Walk-Forward AI Training & Inference Pipeline...")
+        logger.info("Executing Walk-Forward AI Training & Inference Pipeline...")
         df = train_and_predict(
             df,
             forecast_days=forecast_days,
             train_window=train_window,
-            retrain_step=retrain_step
+            retrain_step=retrain_step,
+            hyperparameters=ml_hyperparameters
         )
 
-        logging.info("Generating Hybrid Trading Signals (AI Probability + Trend Filter)...")
+        logger.info("Generating Hybrid Trading Signals (AI Probability + Trend Filter)...")
         df = generate_hybrid_signals(
             df,
             ai_upper_threshold=strategy_cfg.get("ai_upper_threshold", 0.55),
-            ai_lower_threshold=strategy_cfg.get("ai_lower_threshold", 0.45)
+            ai_lower_threshold=strategy_cfg.get("ai_lower_threshold", 0.45),
+            allow_short=strategy_cfg.get("allow_short", True),
+            confirmation_days=strategy_cfg.get("confirmation_days", 1)
         )
 
-        logging.info("Executing Backtest Engine with AI Probability Filtering...")
+        logger.info("Executing High-Performance Numba Backtest Engine...")
         df, trade_log, metrics = run_backtest(
             df,
             initial_capital=initial_capital,
@@ -148,7 +172,7 @@ def run_sentinel():
         )
         latest_price = df["Close"].iloc[-1]
 
-        print("            SENTINEL STATUS REPORT             ")
+        print("\n            SENTINEL STATUS REPORT             ")
         print(f"Target Asset       : {user_ticker}")
         print(f"Starting Capital   : ${initial_capital:.2f}")
         print(f"Latest Close Price : ${latest_price:.2f}")
@@ -166,14 +190,13 @@ def run_sentinel():
             bearish_pct = (1 - latest_prob) * 100
             direction = "BULLISH" if bullish_pct >= 50 else "BEARISH"
 
-            print(f"AI FORECAST ({forecast_days}-Day Horizon) : {direction}")
+            print(f"\nAI FORECAST ({forecast_days}-Day Horizon) : {direction}")
             print(f"Bullish Probability ({forecast_days}d ahead) : %{bullish_pct:.1f}")
-            print(f"Bearish Probability ({forecast_days}d ahead) : %{bearish_pct:.1f}")
+            print(f"Bearish Probability ({forecast_days}d ahead) : %{bearish_pct:.1f}\n")
         else:
-            print("AI FORECAST            : Insufficient data for prediction window.")
+            print("\nAI FORECAST            : Insufficient data for prediction window.\n")
  
-
-        logging.info("Rendering Plotly Interactive Dashboard...")
+        logger.info("Rendering Plotly Interactive Dashboard...")
         save_filename = f"{user_ticker}_sentinel_report.html"
         plot_signals(
             df,
@@ -185,12 +208,13 @@ def run_sentinel():
             initial_capital=initial_capital,
             save_path=save_filename
         )
+        
+        logger.info("Pipeline execution completed successfully.")
 
     except KeyboardInterrupt:
-        logging.warning("Operation cancelled by user. Exiting safely.")
+        logger.warning("Operation cancelled by user (KeyboardInterrupt). Exiting safely.")
     except Exception as e:
-        logging.error(f"Fatal error encountered: {e}")
-        logging.debug(traceback.format_exc())
+        logger.critical("A fatal error occurred during pipeline execution.", exc_info=True)
 
 
 if __name__ == "__main__":

@@ -51,7 +51,7 @@ def clean_market_data(df: pd.DataFrame, keep_weekends: bool = False) -> pd.DataF
     missing_cols = [col for col in required_cols if col not in df.columns]
 
     if missing_cols:
-        print(f"[Sentinel Warning] Eksik OHLC sütunları: {missing_cols}. Veri seti geçersiz kabul edildi.")
+        print(f"[Sentinel Warning] Missing OHLC columns: {missing_cols}. Dataset marked as invalid.")
         return pd.DataFrame()
 
     df = df.dropna(subset=required_cols)
@@ -66,7 +66,7 @@ def clean_market_data(df: pd.DataFrame, keep_weekends: bool = False) -> pd.DataF
 
     invalid_count = (~valid_bars).sum()
     if invalid_count > 0:
-        print(f"[Sentinel Warning] Mantıksız OHLC ilişkisine sahip {invalid_count} bar ayıklandı.")
+        
         df = df[valid_bars]
 
     if df.empty:

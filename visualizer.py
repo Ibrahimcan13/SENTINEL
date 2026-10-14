@@ -70,10 +70,14 @@ def plot_signals(
         sell_signals = df[df["Signal"] == -1]
 
         if not buy_signals.empty and "Close" in buy_signals.columns:
+            rsi_vals = buy_signals.get("RSI", pd.Series(0, index=buy_signals.index)).fillna(0.0).to_numpy()
+            ai_probs = (buy_signals.get("AI_Probability", pd.Series(0, index=buy_signals.index)).fillna(0.0) * 100.0).to_numpy()
+
             hover_buy = [
-                f"BUY Signal<br>RSI: {row.get('RSI', 0):.1f}<br>AI Prob: {row.get('AI_Probability', 0)*100:.1f}%"
-                for _, row in buy_signals.iterrows()
+                f"BUY Signal<br>RSI: {rsi:.1f}<br>AI Prob: {prob:.1f}%"
+                for rsi, prob in zip(rsi_vals, ai_probs)
             ]
+
             fig.add_trace(
                 go.Scatter(
                     x=buy_signals.index, y=buy_signals["Close"], mode="markers", name="BUY",

@@ -75,7 +75,8 @@ def train_and_predict(
     df: pd.DataFrame,
     forecast_days: int = 5,
     train_window: int = 200,
-    retrain_step: int = 20
+    retrain_step: int = 20,
+    hyperparameters: dict = None
 ) -> pd.DataFrame:
     processed_df = create_features_and_targets(df, forecast_days=forecast_days)
 
@@ -89,9 +90,20 @@ def train_and_predict(
         print(f"[Sentinel] Predictor warning: Too few rows ({len(processed_df)}) for rolling window.")
         return df
 
+    default_params = {
+        "n_estimators": 100,
+        "max_depth": 4,
+        "min_samples_leaf": 10,
+        "max_features": "sqrt",
+        "class_weight": "balanced",
+        "random_state": 42
+    }
+    
+    model_kwargs = hyperparameters if hyperparameters else default_params
+
     probabilities = [0.50] * len(processed_df)
     current_model = None
-    scaler = None  
+    scaler = None
 
     for i in range(train_window + forecast_days, len(processed_df)):
         if (i - (train_window + forecast_days)) % retrain_step == 0 or current_model is None:
@@ -110,15 +122,9 @@ def train_and_predict(
 
             scaler = RobustScaler()
             X_train_scaled = scaler.fit_transform(X_train)
-
             current_model = RandomForestClassifier(
-                n_estimators=100,      
-                max_depth=4,          
-                min_samples_leaf=10, 
-                max_features="sqrt",   
-                class_weight="balanced",
-                n_jobs=-1,
-                random_state=42
+                **model_kwargs,
+                n_jobs=-1
             )
             
             current_model.fit(X_train_scaled, y_train)

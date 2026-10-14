@@ -1,5 +1,150 @@
 import numpy as np
 import pandas as pd
+from numba import njit
+
+
+@njit(fastmath=True)
+def _run_backtest_kernel(
+    close_arr: np.ndarray,
+    open_arr: np.ndarray,
+    high_arr: np.ndarray,
+    low_arr: np.ndarray,
+    signal_arr: np.ndarray,
+    ai_prob_arr: np.ndarray,
+    atr_arr: np.ndarray,
+    initial_capital: float,
+    risk_per_trade: float,
+    commission_rate: float,
+    slippage_rate: float,
+    use_atr_stop: bool,
+    atr_multiplier: float,
+    ai_exit_threshold: float,
+):
+    n = len(close_arr)
+    equity_list = np.zeros(n, dtype=np.float64)
+
+    records = np.zeros((n, 8), dtype=np.float64) 
+    trade_count = 0
+
+    cash = initial_capital
+    position = 0.0
+    entry_price = 0.0
+    entry_cost = 0.0
+    entry_idx = 0
+    peak_price = 0.0
+    trough_price = 0.0
+    pending_action = 0
+
+    for i in range(n):
+        c_open = open_arr[i]
+        c_close = close_arr[i]
+        c_high = high_arr[i]
+        c_low = low_arr[i]
+        atr_val = atr_arr[i]
+        ai_prob = ai_prob_arr[i]
+
+        if pending_action != 0 and position == 0.0:
+            if pending_action == 1:  # LONG
+                buy_price = c_open * (1.0 + slippage_rate)
+                if atr_val > 0.0 and use_atr_stop:
+                    risk_amt = cash * risk_per_trade
+                    stop_dist = atr_val * atr_multiplier
+                    raw_shares = risk_amt / (stop_dist + 1e-9)
+                    allocated = min(cash * 0.95, raw_shares * buy_price)
+                else:
+                    allocated = cash * 0.10
+
+                comm = allocated * commission_rate
+                position = (allocated - comm) / buy_price
+                entry_price = buy_price
+                entry_cost = allocated
+                entry_idx = i
+                peak_price = c_high
+                cash -= allocated
+
+            elif pending_action == -1:  
+                short_price = c_open * (1.0 - slippage_rate)
+                if atr_val > 0.0 and use_atr_stop:
+                    risk_amt = cash * risk_per_trade
+                    stop_dist = atr_val * atr_multiplier
+                    raw_shares = risk_amt / (stop_dist + 1e-9)
+                    allocated = min(cash * 0.95, raw_shares * short_price)
+                else:
+                    allocated = cash * 0.10
+
+                comm = allocated * commission_rate
+                position = -((allocated - comm) / short_price)
+                entry_price = short_price
+                entry_cost = allocated
+                entry_idx = i
+                trough_price = c_low
+                cash -= allocated
+
+            pending_action = 0
+
+        if position > 0.0:  
+            peak_price = max(peak_price, c_high)
+            stop_price = peak_price - (atr_val * atr_multiplier) if use_atr_stop and not np.isnan(atr_val) else 0.0
+
+            hit_stop = use_atr_stop and (c_low <= stop_price)
+            ai_exit = not np.isnan(ai_prob) and (ai_prob < ai_exit_threshold)
+            sell_sig = (signal_arr[i] == -1)
+
+            if hit_stop or ai_exit or sell_sig:
+                exit_base = stop_price if hit_stop else c_close
+                sell_p = exit_base * (1.0 - slippage_rate)
+                gross = position * sell_p
+                comm = gross * commission_rate
+                net_returned = gross - comm
+                pnl = net_returned - entry_cost
+                pnl_pct = (pnl / (entry_cost + 1e-9)) * 100.0
+                cash += net_returned
+
+                reason_code = 1.0 if hit_stop else (2.0 if ai_exit else 3.0)
+                records[trade_count] = np.array([1.0, entry_idx, i, entry_price, sell_p, pnl, pnl_pct, reason_code])
+                trade_count += 1
+
+                position = 0.0
+
+        elif position < 0.0:  
+            trough_price = min(trough_price, c_low)
+            stop_price = trough_price + (atr_val * atr_multiplier) if use_atr_stop and not np.isnan(atr_val) else 1e9
+
+            hit_stop = use_atr_stop and (c_high >= stop_price)
+            ai_exit = not np.isnan(ai_prob) and (ai_prob > (1.0 - ai_exit_threshold))
+            buy_sig = (signal_arr[i] == 1)
+
+            if hit_stop or ai_exit or buy_sig:
+                exit_base = stop_price if hit_stop else c_close
+                cover_p = exit_base * (1.0 + slippage_rate)
+                num_shares = abs(position)
+                gross_pnl = (entry_price - cover_p) * num_shares
+                comm = (num_shares * cover_p) * commission_rate
+                net_pnl = gross_pnl - comm
+                pnl_pct = (net_pnl / (entry_cost + 1e-9)) * 100.0
+                cash += (entry_cost + net_pnl)
+
+                reason_code = 1.0 if hit_stop else (2.0 if ai_exit else 3.0)
+                records[trade_count] = np.array([-1.0, entry_idx, i, entry_price, cover_p, net_pnl, pnl_pct, reason_code])
+                trade_count += 1
+
+                position = 0.0
+
+        if position == 0.0 and pending_action == 0:
+            if signal_arr[i] == 1:
+                pending_action = 1
+            elif signal_arr[i] == -1:
+                pending_action = -1
+
+        if position > 0.0:
+            equity_list[i] = cash + (position * c_close)
+        elif position < 0.0:
+            unrealized = (entry_price - c_close) * abs(position)
+            equity_list[i] = cash + entry_cost + unrealized
+        else:
+            equity_list[i] = cash
+
+    return equity_list, records[:trade_count]
 
 
 def calculate_backtest_metrics(
@@ -32,24 +177,14 @@ def calculate_backtest_metrics(
         mean_return = 0.0
         std_return = 0.0
 
-    sharpe_ratio = (
-        (mean_return / std_return) * np.sqrt(252) if std_return > 0.0 else 0.0
-    )
+    sharpe_ratio = ((mean_return / std_return) * np.sqrt(252)) if std_return > 0.0 else 0.0
 
     gross_profits = sum(t["PnL"] for t in trade_log if t["PnL"] > 0)
     gross_losses = abs(sum(t["PnL"] for t in trade_log if t["PnL"] < 0))
 
-    if gross_losses > 0.0:
-        profit_factor = gross_profits / gross_losses
-    elif gross_profits > 0.0:
-        profit_factor = float("inf")
-    else:
-        profit_factor = 0.0
+    profit_factor = (gross_profits / gross_losses) if gross_losses > 0.0 else (float("inf") if gross_profits > 0.0 else 0.0)
 
-    avg_duration = (
-        sum(t["Duration_Days"] for t in trade_log) / total_trades
-        if total_trades > 0 else 0.0
-    )
+    avg_duration = sum(t["Duration_Days"] for t in trade_log) / total_trades if total_trades > 0 else 0.0
 
     metrics = {
         "total_pnl": total_pnl,
@@ -83,271 +218,49 @@ def run_backtest(
 ) -> tuple[pd.DataFrame, list[dict], dict]:
     if df.empty or "Signal" not in df.columns:
         print("[Warning] DataFrame is empty or missing 'Signal' column.")
-        empty_metrics = {
-            "total_pnl": 0.0,
-            "win_rate": 0.0,
-            "total_trades": 0,
-            "winning_trades": 0,
-            "max_drawdown": 0.0,
-            "sharpe_ratio": 0.0,
-            "profit_factor": 0.0,
-            "avg_duration_days": 0.0,
-            "equity_curve": pd.Series([initial_capital]),
-        }
-        return df, [], empty_metrics
-
-    if "Open" not in df.columns or df["Open"].isnull().all():
-        print("[Warning] 'Open' column missing/NaN. Deriving from previous Close.")
-        df["Open"] = df["Close"].shift(1).fillna(df["Close"])
+        return df, [], {"total_pnl": 0.0, "equity_curve": pd.Series([initial_capital])}
 
     df = df.copy()
 
-    dates = df.index.to_numpy()
-    close_arr = df["Close"].to_numpy(dtype=np.float64)
-    open_arr = df["Open"].to_numpy(dtype=np.float64) if "Open" in df.columns else close_arr
-    high_arr = df["High"].to_numpy(dtype=np.float64)
-    low_arr = df["Low"].to_numpy(dtype=np.float64)
-    signal_arr = df["Signal"].to_numpy(dtype=np.int8)
+    close_arr = np.ascontiguousarray(df["Close"].to_numpy(dtype=np.float64))
+    open_arr = np.ascontiguousarray(df["Open"].to_numpy(dtype=np.float64) if "Open" in df.columns else close_arr)
+    high_arr = np.ascontiguousarray(df["High"].to_numpy(dtype=np.float64))
+    low_arr = np.ascontiguousarray(df["Low"].to_numpy(dtype=np.float64))
+    signal_arr = np.ascontiguousarray(df["Signal"].to_numpy(dtype=np.int8))
+    ai_prob_arr = np.ascontiguousarray(df["AI_Probability"].to_numpy(dtype=np.float64) if "AI_Probability" in df.columns else np.full(len(df), np.nan))
+    atr_arr = np.ascontiguousarray(df["ATR"].to_numpy(dtype=np.float64) if "ATR" in df.columns else np.zeros(len(df), dtype=np.float64))
 
-    ai_prob_arr = (
-        df["AI_Probability"].to_numpy(dtype=np.float64)
-        if "AI_Probability" in df.columns
-        else np.full(len(df), np.nan)
+    equity_arr, raw_records = _run_backtest_kernel(
+        close_arr, open_arr, high_arr, low_arr, signal_arr, ai_prob_arr, atr_arr,
+        initial_capital, risk_per_trade, commission_rate, slippage_rate,
+        use_atr_stop, atr_multiplier, ai_exit_threshold
     )
 
-    atr_arr = (
-        df["ATR"].to_numpy(dtype=np.float64)
-        if "ATR" in df.columns
-        else np.zeros(len(df), dtype=np.float64)
-    )
-
-    cash = initial_capital
-    position = 0.0
-    entry_price = 0.0
-    entry_cost = 0.0
-    entry_date = None
-    peak_price_since_entry = 0.0
-    trough_price_since_entry = 0.0
-
-    pending_action = 0  
-    pending_reason = ""
-
+    dates = df.index
     trade_log = []
-    equity_list = np.zeros(len(df), dtype=np.float64)
+    reason_map = {1.0: "ATR Stop Loss", 2.0: "AI Exit", 3.0: "Signal Exit"}
 
-    for i in range(len(df)):
-        current_date = dates[i]
-        current_open = open_arr[i]
-        current_close = close_arr[i]
-        current_high = high_arr[i]
-        current_low = low_arr[i]
-        atr_val = atr_arr[i]
-
-        if pending_action != 0 and position == 0.0:
-            if pending_action == 1:  
-                buy_price = current_open * (1.0 + slippage_rate)
-                if atr_val > 0.0 and use_atr_stop:
-                    risk_amount = cash * risk_per_trade
-                    stop_distance = atr_val * atr_multiplier
-                    raw_shares = risk_amount / (stop_distance + 1e-9)
-                    allocated_cash = min(cash * 0.95, raw_shares * buy_price)
-                else:
-                    allocated_cash = cash * 0.10
-
-                commission = allocated_cash * commission_rate
-                investable_cash = allocated_cash - commission
-
-                position = investable_cash / buy_price
-                entry_price = buy_price
-                entry_cost = allocated_cash
-                entry_date = current_date
-                peak_price_since_entry = current_high
-                cash -= allocated_cash
-
-            elif pending_action == -1:  
-                short_price = current_open * (1.0 - slippage_rate)
-                if atr_val > 0.0 and use_atr_stop:
-                    risk_amount = cash * risk_per_trade
-                    stop_distance = atr_val * atr_multiplier
-                    raw_shares = risk_amount / (stop_distance + 1e-9)
-                    allocated_cash = min(cash * 0.95, raw_shares * short_price)
-                else:
-                    allocated_cash = cash * 0.10
-
-                commission = allocated_cash * commission_rate
-                investable_cash = allocated_cash - commission
-
-                position = -(investable_cash / short_price)
-                entry_price = short_price
-                entry_cost = allocated_cash
-                entry_date = current_date
-                trough_price_since_entry = current_low
-                cash -= allocated_cash
-
-            pending_action = 0  
-
-        if position > 0.0:  
-            peak_price_since_entry = max(peak_price_since_entry, current_high)
-            stop_loss_price = (
-                peak_price_since_entry - (atr_val * atr_multiplier)
-                if use_atr_stop and not np.isnan(atr_val)
-                else 0.0
-            )
-
-            hit_stop_loss = use_atr_stop and (current_low <= stop_loss_price)
-            ai_bearish_exit = not np.isnan(ai_prob_arr[i]) and (ai_prob_arr[i] < ai_exit_threshold)
-            sell_signal = (signal_arr[i] == -1)
-
-            if hit_stop_loss or ai_bearish_exit or sell_signal:
-                exit_base_price = stop_loss_price if hit_stop_loss else current_close
-                sell_price = exit_base_price * (1.0 - slippage_rate)
-                gross_cash = position * sell_price
-                commission = gross_cash * commission_rate
-                net_returned_cash = gross_cash - commission
-
-                pnl = net_returned_cash - entry_cost
-                pnl_pct = (pnl / (entry_cost + 1e-9)) * 100.0
-                cash += net_returned_cash
-
-                duration_days = (
-                    (pd.Timestamp(current_date) - pd.Timestamp(entry_date)).days
-                    if entry_date is not None else 0
-                )
-
-                reason = "LONG Exit (SELL)"
-                if hit_stop_loss:
-                    reason = "LONG ATR Stop Loss"
-                elif ai_bearish_exit:
-                    reason = "LONG AI Bearish Exit"
-
-                trade_log.append({
-                    "Type": "LONG",
-                    "Entry_Date": entry_date,
-                    "Exit_Date": current_date,
-                    "Entry_Price": entry_price,
-                    "Exit_Price": sell_price,
-                    "PnL": pnl,
-                    "PnL_Pct": pnl_pct,
-                    "Duration_Days": duration_days,
-                    "Reason": reason,
-                })
-
-                position = 0.0
-                entry_price = 0.0
-                entry_cost = 0.0
-                entry_date = None
-
-        elif position < 0.0: 
-            trough_price_since_entry = min(trough_price_since_entry, current_low)
-            stop_loss_price = (
-                trough_price_since_entry + (atr_val * atr_multiplier)
-                if use_atr_stop and not np.isnan(atr_val)
-                else float("inf")
-            )
-
-            hit_stop_loss = use_atr_stop and (current_high >= stop_loss_price)
-            ai_bullish_exit = not np.isnan(ai_prob_arr[i]) and (ai_prob_arr[i] > (1.0 - ai_exit_threshold))
-            buy_signal = (signal_arr[i] == 1)
-
-            if hit_stop_loss or ai_bullish_exit or buy_signal:
-                exit_base_price = stop_loss_price if hit_stop_loss else current_close
-                cover_price = exit_base_price * (1.0 + slippage_rate)
-                
-                num_shares = abs(position)
-                gross_pnl = (entry_price - cover_price) * num_shares
-                
-                buyback_value = num_shares * cover_price
-                commission = buyback_value * commission_rate
-                net_pnl = gross_pnl - commission
-                
-                pnl_pct = (net_pnl / (entry_cost + 1e-9)) * 100.0
-                returned_cash = entry_cost + net_pnl
-                cash += returned_cash
-                
-                duration_days = (
-                    (pd.Timestamp(current_date) - pd.Timestamp(entry_date)).days
-                    if entry_date is not None else 0
-                )
-
-                reason = "SHORT Exit (COVER)"
-                if hit_stop_loss:
-                    reason = "SHORT ATR Stop Loss"
-                elif ai_bullish_exit:
-                    reason = "SHORT AI Bullish Exit"
-
-                trade_log.append({
-                    "Type": "SHORT",
-                    "Entry_Date": entry_date,
-                    "Exit_Date": current_date,
-                    "Entry_Price": entry_price,
-                    "Exit_Price": cover_price,
-                    "PnL": net_pnl,
-                    "PnL_Pct": pnl_pct,
-                    "Duration_Days": duration_days,
-                    "Reason": reason,
-                })
-
-                position = 0.0
-                entry_price = 0.0
-                entry_cost = 0.0
-                entry_date = None
-
-        if position == 0.0 and pending_action == 0:
-            if signal_arr[i] == 1:
-                pending_action = 1
-            elif signal_arr[i] == -1:
-                pending_action = -1
-
-        if position > 0.0:
-            current_equity = cash + (position * current_close)
-        elif position < 0.0:
-            unrealized_pnl = (entry_price - current_close) * abs(position)
-            current_equity = cash + entry_cost + unrealized_pnl
-        else:
-            current_equity = cash
-
-        equity_list[i] = current_equity
-
-    if position != 0.0:
-        last_close = close_arr[-1]
-        if position > 0.0:
-            sell_price = last_close * (1.0 - slippage_rate)
-            gross_cash = position * sell_price
-            commission = gross_cash * commission_rate
-            pnl = (gross_cash - commission) - entry_cost
-            pnl_pct = (pnl / (entry_cost + 1e-9)) * 100.0
-            cash += (gross_cash - commission)
-            p_type = "LONG"
-            exit_p = sell_price
-        else:
-            cover_price = last_close * (1.0 + slippage_rate)
-            num_shares = abs(position)
-            gross_pnl = (entry_price - cover_price) * num_shares
-            commission = (num_shares * cover_price) * commission_rate
-            pnl = gross_pnl - commission
-            pnl_pct = (pnl / (entry_cost + 1e-9)) * 100.0
-            cash += (entry_cost + pnl)
-            p_type = "SHORT"
-            exit_p = cover_price
+    for rec in raw_records:
+        t_type = "LONG" if rec[0] == 1.0 else "SHORT"
+        entry_idx = int(rec[1])
+        exit_idx = int(rec[2])
+        dur_days = (pd.Timestamp(dates[exit_idx]) - pd.Timestamp(dates[entry_idx])).days
 
         trade_log.append({
-            "Type": p_type,
-            "Entry_Date": entry_date,
-            "Exit_Date": dates[-1],
-            "Entry_Price": entry_price,
-            "Exit_Price": exit_p,
-            "PnL": pnl,
-            "PnL_Pct": pnl_pct,
-            "Duration_Days": (pd.Timestamp(dates[-1]) - pd.Timestamp(entry_date)).days if entry_date is not None else 0,
-            "Reason": "End of Data (Auto Close)",
+            "Type": t_type,
+            "Entry_Date": dates[entry_idx],
+            "Exit_Date": dates[exit_idx],
+            "Entry_Price": rec[3],
+            "Exit_Price": rec[4],
+            "PnL": rec[5],
+            "PnL_Pct": rec[6],
+            "Duration_Days": dur_days,
+            "Reason": f"{t_type} {reason_map.get(rec[7], 'Exit')}",
         })
-        equity_list[-1] = cash
 
-    equity_series = pd.Series(equity_list, index=df.index)
+    equity_series = pd.Series(equity_arr, index=df.index)
     df["Portfolio_Equity"] = equity_series
 
-    metrics = calculate_backtest_metrics(
-        df, trade_log, initial_capital, equity_series
-    )
+    metrics = calculate_backtest_metrics(df, trade_log, initial_capital, equity_series)
 
     return df, trade_log, metrics

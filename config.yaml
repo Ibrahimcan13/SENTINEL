@@ -12,11 +12,19 @@ machine_learning:
   train_window: 200
   forecast_days: 5
   retrain_step: 20
+  hyperparameters:
+    n_estimators: 100
+    max_depth: 4
+    min_samples_leaf: 10
+    max_features: "sqrt"
+    class_weight: "balanced"
+    random_state: 42
 
 strategy:
   ai_upper_threshold: 0.55
   ai_lower_threshold: 0.45
   allow_short: true
+  confirmation_days: 1
 
 backtest:
   initial_capital: 1000.0
