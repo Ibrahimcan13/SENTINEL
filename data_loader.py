@@ -66,17 +66,17 @@ def clean_market_data(df: pd.DataFrame, keep_weekends: bool = False) -> pd.DataF
 
     invalid_count = (~valid_bars).sum()
     if invalid_count > 0:
-        
+        print(f"[Sentinel Warning] Dropped {invalid_count} bars with invalid OHLC relationships.")
         df = df[valid_bars]
 
     if df.empty:
         return df
 
-    float_cols = df.select_dtypes(include=['float64']).columns
-    df[float_cols] = df[float_cols].astype('float32')
-
     if 'Volume' in df.columns:
-        df['Volume'] = df['Volume'].fillna(0).astype('float32' , errors='ignore')
+        df['Volume'] = df['Volume'].fillna(0)
+
+    numeric_cols = df.select_dtypes(include=['float64', 'int64']).columns
+    df[numeric_cols] = df[numeric_cols].astype('float32')
 
     return df
 

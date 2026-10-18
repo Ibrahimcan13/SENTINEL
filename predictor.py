@@ -10,7 +10,6 @@ def apply_triple_barrier_labels(
     sl_multiplier: float = 1.0,
     max_holding_days: int = 5
 ) -> pd.Series:
-
     if "ATR" not in df.columns or df.empty:
         simple_target = (df["Close"].shift(-max_holding_days) > df["Close"]).astype(float)
         simple_target.iloc[-max_holding_days:] = np.nan
@@ -50,7 +49,12 @@ def apply_triple_barrier_labels(
     return pd.Series(labels, index=df.index)
 
 
-def create_features_and_targets(df: pd.DataFrame, forecast_days: int = 5) -> pd.DataFrame:
+def create_features_and_targets(
+    df: pd.DataFrame,
+    forecast_days: int = 5,
+    pt_multiplier: float = 2.0,
+    sl_multiplier: float = 1.0
+) -> pd.DataFrame:
     if df.empty:
         return df
 
@@ -60,12 +64,15 @@ def create_features_and_targets(df: pd.DataFrame, forecast_days: int = 5) -> pd.
 
     if "feat_rsi_scaled" not in data.columns:
         data["feat_rsi_scaled"] = ((data["RSI"] - 50.0) / 50.0).fillna(0.0) if "RSI" in data.columns else 0.0
-        
+
     if "feat_kalman_dev" not in data.columns and "Kalman" in data.columns:
         data["feat_kalman_dev"] = ((data["Close"] - data["Kalman"]) / (data["Kalman"] + 1e-9)).fillna(0.0)
 
     data["Target_Direction"] = apply_triple_barrier_labels(
-        data, pt_multiplier=2.0, sl_multiplier=1.0, max_holding_days=forecast_days
+        data,
+        pt_multiplier=pt_multiplier,
+        sl_multiplier=sl_multiplier,
+        max_holding_days=forecast_days
     )
 
     return data
@@ -76,9 +83,16 @@ def train_and_predict(
     forecast_days: int = 5,
     train_window: int = 200,
     retrain_step: int = 20,
+    pt_multiplier: float = 2.0,
+    sl_multiplier: float = 1.0,
     hyperparameters: dict = None
 ) -> pd.DataFrame:
-    processed_df = create_features_and_targets(df, forecast_days=forecast_days)
+    processed_df = create_features_and_targets(
+        df,
+        forecast_days=forecast_days,
+        pt_multiplier=pt_multiplier,
+        sl_multiplier=sl_multiplier
+    )
 
     if processed_df.empty:
         print("[Sentinel] Predictor error: Insufficient data to train the model.")
@@ -98,7 +112,7 @@ def train_and_predict(
         "class_weight": "balanced",
         "random_state": 42
     }
-    
+
     model_kwargs = hyperparameters if hyperparameters else default_params
 
     probabilities = [0.50] * len(processed_df)
@@ -126,7 +140,7 @@ def train_and_predict(
                 **model_kwargs,
                 n_jobs=-1
             )
-            
+
             current_model.fit(X_train_scaled, y_train)
 
         X_test = processed_df.iloc[[i]][feature_cols]

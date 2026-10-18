@@ -87,6 +87,8 @@ def run_sentinel():
         train_window = ml_cfg.get("train_window", 200)
         forecast_days = ml_cfg.get("forecast_days", 5)
         retrain_step = ml_cfg.get("retrain_step", 20)
+        pt_multiplier = ml_cfg.get("pt_multiplier", 2.0)
+        sl_multiplier = ml_cfg.get("sl_multiplier", 1.0)
 
         ml_hyperparameters = ml_cfg.get("hyperparameters", {})
 
@@ -139,6 +141,8 @@ def run_sentinel():
             forecast_days=forecast_days,
             train_window=train_window,
             retrain_step=retrain_step,
+            pt_multiplier=pt_multiplier,
+            sl_multiplier=sl_multiplier,
             hyperparameters=ml_hyperparameters
         )
 
