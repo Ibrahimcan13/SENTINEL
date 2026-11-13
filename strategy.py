@@ -7,7 +7,9 @@ def generate_hybrid_signals(
     ai_upper_threshold: float = 0.55,
     ai_lower_threshold: float = 0.45,
     allow_short: bool = True,
-    confirmation_days: int = 1  
+    confirmation_days: int = 1,
+    use_dynamic_thresholds: bool = True,
+    vol_sensitivity: float = 0.5
 ) -> pd.DataFrame:
     if df.empty or "AI_Probability" not in df.columns:
         print("[Sentinel Warning] 'AI_Probability' column is missing for Strategy Engine.")
@@ -15,6 +17,21 @@ def generate_hybrid_signals(
 
     df = df.copy()
     df["Signal"] = 0
+    if use_dynamic_thresholds and  "feat_volatility" in df.columns:
+        baseline_vol = df["feat_volatility"].rolling(window=50, min_periods=10).median()
+        vol_ratio = df["feat_volatility"] / (baseline_vol + 1e-9)
+       
+        vol_excess = (vol_ratio - 1.0).clip(lower=0.0, upper=2.0).fillna(0.0)
+        threshold_shift = vol_excess * vol_sensitivity
+
+        upper_thresh = (ai_upper_threshold + threshold_shift).clip(upper=0.85)
+        lower_thresh = (ai_lower_threshold - threshold_shift).clip(lower=0.15)
+    else:
+        upper_thresh = ai_upper_threshold
+        lower_thresh = ai_lower_threshold
+
+    df["Dynamic_Upper_Thresh"] = upper_thresh
+    df["Dynamic_Lower_Thresh"] = lower_thresh
 
     if "Kalman" in df.columns:
         trend_bullish = df["Close"] > df["Kalman"]

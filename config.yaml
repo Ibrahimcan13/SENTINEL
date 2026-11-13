@@ -1,5 +1,6 @@
 data:
   default_ticker: "RACE"
+  interval: "1d"
 
 analysis:
   window_size: 20

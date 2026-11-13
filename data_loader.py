@@ -42,7 +42,13 @@ def clean_market_data(df: pd.DataFrame, keep_weekends: bool = False) -> pd.DataF
     else:
         df.index = df.index.tz_localize(None)
 
+    df.index.name = "Datetime"
     df = df.sort_index()
+    duplicate_count = df.index.duplicated().sum()
+    if duplicate_count > 0:
+        print(f"[Sentinel Warning] Found {duplicate_count} duplicated index rows. Dropping duplicates.")
+        df = df[~df.index.duplicated(keep='first')]
+
 
     if not keep_weekends:
         df = df[df.index.dayofweek < 5]
@@ -74,6 +80,11 @@ def clean_market_data(df: pd.DataFrame, keep_weekends: bool = False) -> pd.DataF
 
     if 'Volume' in df.columns:
         df['Volume'] = df['Volume'].fillna(0)
+
+        negative_volume_count = (df['Volume'] < 0).sum()
+        if negative_volume_count > 0:
+            print(f"[Sentinel Warning] Found {negative_volume_count} rows with negative Volume. Setting to 0.")
+            df.loc[df['Volume'] < 0, 'Volume'] = 0
 
     numeric_cols = df.select_dtypes(include=['float64', 'int64']).columns
     df[numeric_cols] = df[numeric_cols].astype('float32')

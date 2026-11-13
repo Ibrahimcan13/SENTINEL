@@ -26,6 +26,26 @@ def _kalman_loop(prices: np.ndarray, r_variances: np.ndarray, q_variances: np.nd
     return kalman_estimates
 
 
+@njit(fastmath=True)
+def _rolling_slope_loop(prices: np.ndarray, window: int) -> np.ndarray:
+    n = len(prices)
+    slopes = np.full(n, np.nan, dtype=np.float64)
+    if n < window or window < 2:
+        return slopes
+
+    x_mean = (window - 1) * 0.5
+    x_var = window * (window * window - 1) / 12.0 + 1e-9
+
+    for i in range(window - 1, n):
+        cov = 0.0
+        start_idx = i - window + 1
+        for j in range(window):
+            cov += (j - x_mean) * prices[start_idx + j]
+        slopes[i] = cov / x_var
+
+    return slopes
+
+
 def calculate_average_true_range(df: pd.DataFrame, window: int = 14) -> pd.DataFrame:
     required_cols = {"High", "Low", "Close"}
     if df.empty or not required_cols.issubset(df.columns):
@@ -56,7 +76,7 @@ def add_kalman_filter(
 
     prices = np.ascontiguousarray(df["Close"].to_numpy(dtype=np.float64))
     atr_values = np.ascontiguousarray(lagged_atr.to_numpy(dtype=np.float64))
-    
+
     atr_norm = atr_values / (prices + 1e-9)
 
     r_variances = np.ascontiguousarray(base_measurement_variance / (1.0 + (atr_norm * 100.0)))
@@ -80,7 +100,20 @@ def add_rsi(df: pd.DataFrame, window: int = 14) -> pd.DataFrame:
 
     rs = avg_gain / (avg_loss + 1e-9)
     df["RSI"] = 100 - (100 / (1 + rs))
-    df["feat_rsi_scaled"] = (df["RSI"] - 50.0) / 50.0  
+    df["feat_rsi_scaled"] = (df["RSI"] - 50.0) / 50.0
+    return df
+
+
+def add_price_momentum(df: pd.DataFrame, window: int = 10) -> pd.DataFrame:
+    if df.empty or "Close" not in df.columns:
+        return df
+
+    df[f"feat_roc_{window}"] = df["Close"].pct_change(periods=window)
+
+    prices = np.ascontiguousarray(df["Close"].to_numpy(dtype=np.float64))
+    slopes = _rolling_slope_loop(prices, window)
+    df[f"feat_trend_slope_{window}"] = slopes / (df["Close"] + 1e-9)
+
     return df
 
 
@@ -98,13 +131,14 @@ def get_robust_zscore(series: pd.Series, window: int = 20) -> pd.Series:
     return robust_zscore.fillna(0.0)
 
 
-def extract_features(df: pd.DataFrame, window: int = 20) -> pd.DataFrame:
+def extract_features(df: pd.DataFrame, window: int = 20, momentum_window: int = 10) -> pd.DataFrame:
     if df.empty:
         return df
 
     df = calculate_average_true_range(df, window=14)
     df = add_rsi(df, window=14)
     df = add_kalman_filter(df)
+    df = add_price_momentum(df, window=momentum_window)
 
     sma_col = f"SMA_{window}"
     df[sma_col] = df["Close"].rolling(window=window).mean()
