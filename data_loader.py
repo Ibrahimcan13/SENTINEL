@@ -49,7 +49,6 @@ def clean_market_data(df: pd.DataFrame, keep_weekends: bool = False) -> pd.DataF
         print(f"[Sentinel Warning] Found {duplicate_count} duplicated index rows. Dropping duplicates.")
         df = df[~df.index.duplicated(keep='first')]
 
-
     if not keep_weekends:
         df = df[df.index.dayofweek < 5]
 
@@ -63,10 +62,10 @@ def clean_market_data(df: pd.DataFrame, keep_weekends: bool = False) -> pd.DataF
     df = df.dropna(subset=required_cols)
 
     valid_bars = (
-        (df["High"] >= df["Low"]) & 
-        (df["High"] >= df["Open"]) & 
-        (df["High"] >= df["Close"]) & 
-        (df["Low"] <= df["Open"]) & 
+        (df["High"] >= df["Low"]) &
+        (df["High"] >= df["Open"]) &
+        (df["High"] >= df["Close"]) &
+        (df["Low"] <= df["Open"]) &
         (df["Low"] <= df["Close"])
     )
 
@@ -117,7 +116,7 @@ def save_data_to_parquet(
         return ""
 
 
-def load_local_data(filename: str, folder: str = "data") -> pd.DataFrame:
+def load_local_data(filename: str, folder: str = "data", keep_weekends: bool = False) -> pd.DataFrame:
     if not filename.endswith(".parquet"):
         filename = f"{os.path.splitext(filename)[0]}.parquet"
 
@@ -126,7 +125,7 @@ def load_local_data(filename: str, folder: str = "data") -> pd.DataFrame:
     try:
         if os.path.exists(filepath):
             df = pd.read_parquet(filepath, engine="pyarrow")
-            return clean_market_data(df)
+            return clean_market_data(df, keep_weekends=keep_weekends)
         else:
             return pd.DataFrame()
 
@@ -144,32 +143,39 @@ def _manage_memory_cache(key: str, df: pd.DataFrame):
         _DATA_CACHE.popitem(last=False)
 
 
-def _fetch_single_ticker(ticker: str, start_date: str, end_date: str, folder: str = "data") -> pd.DataFrame:
-    cache_key = f"{ticker}_{start_date}_{end_date}"
+def _fetch_single_ticker(
+    ticker: str,
+    start_date: str,
+    end_date: str,
+    interval: str = "1d",
+    folder: str = "data"
+) -> pd.DataFrame:
+    keep_weekends = ticker.endswith("-USD")
+    cache_key = f"{ticker}_{interval}_{start_date}_{end_date}"
 
     if cache_key in _DATA_CACHE:
-        print(f"[Sentinel] [Memory Cache Hit] Returning cached data for {ticker}...")
+        print(f"[Sentinel] [Memory Cache Hit] Returning cached data for {ticker} ({interval})...")
         _DATA_CACHE.move_to_end(cache_key)
         return _DATA_CACHE[cache_key].copy()
 
     filename = f"{cache_key}.parquet"
-    local_df = load_local_data(filename, folder=folder)
+    local_df = load_local_data(filename, folder=folder, keep_weekends=keep_weekends)
     if not local_df.empty:
-        print(f"[Sentinel] [Disk Cache Hit] Loaded {ticker} from local ZSTD Parquet storage.")
+        print(f"[Sentinel] [Disk Cache Hit] Loaded {ticker} ({interval}) from local ZSTD Parquet storage.")
         _manage_memory_cache(cache_key, local_df)
         return local_df
 
-    print(f"[Sentinel] Fetching data from API for ticker: {ticker} ({start_date} to {end_date})...")
+    print(f"[Sentinel] Fetching data from API for ticker: {ticker} [{start_date} to {end_date} | {interval}]...")
 
     try:
-        df = yf.download(ticker, start=start_date, end=end_date, progress=False)
+        df = yf.download(ticker, start=start_date, end=end_date, interval=interval, progress=False)
 
         if df.empty:
             print(f"[Error] No data returned for ticker '{ticker}'. Please check symbol or date range.")
             return pd.DataFrame()
 
         df = _normalize_yfinance_columns(df, ticker=ticker)
-        df = clean_market_data(df)
+        df = clean_market_data(df, keep_weekends=keep_weekends)
 
         if df.empty:
             print(f"[Error] Data for '{ticker}' failed quality checks and was dropped.")
@@ -191,6 +197,7 @@ def fetch_market_data(
         tickers: str | list[str],
         start_date: str = None,
         end_date: str = None,
+        interval: str = "1d",
         days_back: int = 365,
         folder: str = "data",
         combine_into_single_df: bool = False
@@ -214,11 +221,11 @@ def fetch_market_data(
         return pd.DataFrame()
 
     if len(ticker_list) == 1:
-        return _fetch_single_ticker(ticker_list[0], start_date, end_date, folder=folder)
+        return _fetch_single_ticker(ticker_list[0], start_date, end_date, interval=interval, folder=folder)
 
     results = {}
     for ticker in ticker_list:
-        df = _fetch_single_ticker(ticker, start_date, end_date, folder=folder)
+        df = _fetch_single_ticker(ticker, start_date, end_date, interval=interval, folder=folder)
         if not df.empty:
             results[ticker] = df
 

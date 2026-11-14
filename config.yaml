@@ -6,6 +6,7 @@ analysis:
   window_size: 20
   rsi_window: 14
   atr_window: 14
+  momentum_window: 10
   use_kalman: true
 
 machine_learning:
@@ -28,6 +29,8 @@ strategy:
   ai_lower_threshold: 0.45
   allow_short: true
   confirmation_days: 1
+  use_dynnamic_thesholds: true
+  vol_sensitivity: 0.5
 
 backtest:
   initial_capital: 1000.0
@@ -37,3 +40,4 @@ backtest:
   use_atr_stop: true
   atr_multiplier: 2.0
   ai_exit_threshold: 0.50
+  max_vol_participation: 0.1

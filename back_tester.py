@@ -4,11 +4,30 @@ from numba import njit
 
 
 @njit(fastmath=True)
+def _calc_dynamic_slippage(
+    shares: float,
+    bar_vol: float,
+    base_slippage: float,
+    max_participation: float = 0.10,
+) -> float:
+    if bar_vol <= 0.0:
+        return min(base_slippage * 10.0, 0.05)
+
+    participation = shares / bar_vol
+    if participation <= max_participation:
+        return base_slippage
+
+    impact_multiplier = (participation / max_participation) ** 1.5
+    return min(base_slippage * impact_multiplier, 0.05)
+
+
+@njit(fastmath=True)
 def _run_backtest_kernel(
     close_arr: np.ndarray,
     open_arr: np.ndarray,
     high_arr: np.ndarray,
     low_arr: np.ndarray,
+    volume_arr: np.ndarray,
     signal_arr: np.ndarray,
     ai_prob_arr: np.ndarray,
     atr_arr: np.ndarray,
@@ -19,11 +38,12 @@ def _run_backtest_kernel(
     use_atr_stop: bool,
     atr_multiplier: float,
     ai_exit_threshold: float,
+    max_vol_participation: float = 0.10,
 ):
     n = len(close_arr)
     equity_list = np.zeros(n, dtype=np.float64)
 
-    records = np.zeros((n, 8), dtype=np.float64) 
+    records = np.zeros((n, 8), dtype=np.float64)
     trade_count = 0
 
     cash = initial_capital
@@ -40,49 +60,48 @@ def _run_backtest_kernel(
         c_close = close_arr[i]
         c_high = high_arr[i]
         c_low = low_arr[i]
+        c_vol = volume_arr[i]
         atr_val = atr_arr[i]
         ai_prob = ai_prob_arr[i]
 
         if pending_action != 0 and position == 0.0:
-            if pending_action == 1:  # LONG
-                buy_price = c_open * (1.0 + slippage_rate)
+            if c_vol > 0.0:
                 if atr_val > 0.0 and use_atr_stop:
                     risk_amt = cash * risk_per_trade
                     stop_dist = atr_val * atr_multiplier
                     raw_shares = risk_amt / (stop_dist + 1e-9)
-                    allocated = min(cash * 0.95, raw_shares * buy_price)
+                    allocated = min(cash * 0.95, raw_shares * c_open)
                 else:
                     allocated = cash * 0.10
 
-                comm = allocated * commission_rate
-                position = (allocated - comm) / buy_price
-                entry_price = buy_price
-                entry_cost = allocated
-                entry_idx = i
-                peak_price = c_high
-                cash -= allocated
+                est_shares = allocated / (c_open + 1e-9)
+                eff_slippage = _calc_dynamic_slippage(
+                    est_shares, c_vol, slippage_rate, max_vol_participation
+                )
 
-            elif pending_action == -1:  
-                short_price = c_open * (1.0 - slippage_rate)
-                if atr_val > 0.0 and use_atr_stop:
-                    risk_amt = cash * risk_per_trade
-                    stop_dist = atr_val * atr_multiplier
-                    raw_shares = risk_amt / (stop_dist + 1e-9)
-                    allocated = min(cash * 0.95, raw_shares * short_price)
-                else:
-                    allocated = cash * 0.10
+                if pending_action == 1:  
+                    buy_price = c_open * (1.0 + eff_slippage)
+                    comm = allocated * commission_rate
+                    position = (allocated - comm) / buy_price
+                    entry_price = buy_price
+                    entry_cost = allocated
+                    entry_idx = i
+                    peak_price = c_high
+                    cash -= allocated
 
-                comm = allocated * commission_rate
-                position = -((allocated - comm) / short_price)
-                entry_price = short_price
-                entry_cost = allocated
-                entry_idx = i
-                trough_price = c_low
-                cash -= allocated
+                elif pending_action == -1: 
+                    short_price = c_open * (1.0 - eff_slippage)
+                    comm = allocated * commission_rate
+                    position = -((allocated - comm) / short_price)
+                    entry_price = short_price
+                    entry_cost = allocated
+                    entry_idx = i
+                    trough_price = c_low
+                    cash -= allocated
 
             pending_action = 0
 
-        if position > 0.0:  
+        if position > 0.0:
             peak_price = max(peak_price, c_high)
             stop_price = peak_price - (atr_val * atr_multiplier) if use_atr_stop and not np.isnan(atr_val) else 0.0
 
@@ -92,7 +111,10 @@ def _run_backtest_kernel(
 
             if hit_stop or ai_exit or sell_sig:
                 exit_base = stop_price if hit_stop else c_close
-                sell_p = exit_base * (1.0 - slippage_rate)
+                eff_slippage = _calc_dynamic_slippage(
+                    position, c_vol, slippage_rate, max_vol_participation
+                )
+                sell_p = exit_base * (1.0 - eff_slippage)
                 gross = position * sell_p
                 comm = gross * commission_rate
                 net_returned = gross - comm
@@ -106,7 +128,7 @@ def _run_backtest_kernel(
 
                 position = 0.0
 
-        elif position < 0.0:  
+        elif position < 0.0:
             trough_price = min(trough_price, c_low)
             stop_price = trough_price + (atr_val * atr_multiplier) if use_atr_stop and not np.isnan(atr_val) else 1e9
 
@@ -116,8 +138,11 @@ def _run_backtest_kernel(
 
             if hit_stop or ai_exit or buy_sig:
                 exit_base = stop_price if hit_stop else c_close
-                cover_p = exit_base * (1.0 + slippage_rate)
                 num_shares = abs(position)
+                eff_slippage = _calc_dynamic_slippage(
+                    num_shares, c_vol, slippage_rate, max_vol_participation
+                )
+                cover_p = exit_base * (1.0 + eff_slippage)
                 gross_pnl = (entry_price - cover_p) * num_shares
                 comm = (num_shares * cover_p) * commission_rate
                 net_pnl = gross_pnl - comm
@@ -215,6 +240,7 @@ def run_backtest(
     use_atr_stop: bool = True,
     atr_multiplier: float = 2.0,
     ai_exit_threshold: float = 0.50,
+    max_vol_participation: float = 0.10,
 ) -> tuple[pd.DataFrame, list[dict], dict]:
     if df.empty or "Signal" not in df.columns:
         print("[Warning] DataFrame is empty or missing 'Signal' column.")
@@ -226,14 +252,17 @@ def run_backtest(
     open_arr = np.ascontiguousarray(df["Open"].to_numpy(dtype=np.float64) if "Open" in df.columns else close_arr)
     high_arr = np.ascontiguousarray(df["High"].to_numpy(dtype=np.float64))
     low_arr = np.ascontiguousarray(df["Low"].to_numpy(dtype=np.float64))
+    volume_arr = np.ascontiguousarray(
+        df["Volume"].to_numpy(dtype=np.float64) if "Volume" in df.columns else np.full(len(df), 1e12, dtype=np.float64)
+    )
     signal_arr = np.ascontiguousarray(df["Signal"].to_numpy(dtype=np.int8))
     ai_prob_arr = np.ascontiguousarray(df["AI_Probability"].to_numpy(dtype=np.float64) if "AI_Probability" in df.columns else np.full(len(df), np.nan))
     atr_arr = np.ascontiguousarray(df["ATR"].to_numpy(dtype=np.float64) if "ATR" in df.columns else np.zeros(len(df), dtype=np.float64))
 
     equity_arr, raw_records = _run_backtest_kernel(
-        close_arr, open_arr, high_arr, low_arr, signal_arr, ai_prob_arr, atr_arr,
+        close_arr, open_arr, high_arr, low_arr, volume_arr, signal_arr, ai_prob_arr, atr_arr,
         initial_capital, risk_per_trade, commission_rate, slippage_rate,
-        use_atr_stop, atr_multiplier, ai_exit_threshold
+        use_atr_stop, atr_multiplier, ai_exit_threshold, max_vol_participation
     )
 
     dates = df.index
